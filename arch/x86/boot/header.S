@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *	header.S
  *
@@ -16,9 +17,7 @@
  */
 
 #include <asm/segment.h>
-#include <generated/utsrelease.h>
 #include <asm/boot.h>
-#include <asm/e820.h>
 #include <asm/page_types.h>
 #include <asm/setup.h>
 #include <asm/bootparam.h>
@@ -301,7 +300,7 @@ _start:
 	# Part 2 of the header, from the old setup.S
 
 		.ascii	"HdrS"		# header signature
-		.word	0x020d		# header version number (>= 0x0105)
+		.word	0x020e		# header version number (>= 0x0105)
 					# or else old loadlin-1.5 will fail)
 		.globl realmode_swtch
 realmode_swtch:	.word	0, 0		# default_switch, SETUPSEG
@@ -521,8 +520,14 @@ pref_address:		.quad LOAD_PHYSICAL_ADDR	# preferred load addr
 # the description in lib/decompressor_xxx.c for specific information.
 #
 # extra_bytes = (uncompressed_size >> 12) + 65536 + 128
+#
+# LZ4 is even worse: data that cannot be further compressed grows by 0.4%,
+# or one byte per 256 bytes. OTOH, we can safely get rid of the +128 as
+# the size-dependent part now grows so fast.
+#
+# extra_bytes = (uncompressed_size >> 8) + 65536
 
-#define ZO_z_extra_bytes	((ZO_z_output_len >> 12) + 65536 + 128)
+#define ZO_z_extra_bytes	((ZO_z_output_len >> 8) + 65536)
 #if ZO_z_output_len > ZO_z_input_len
 # define ZO_z_extract_offset	(ZO_z_output_len + ZO_z_extra_bytes - \
 				 ZO_z_input_len)
@@ -552,6 +557,10 @@ pref_address:		.quad LOAD_PHYSICAL_ADDR	# preferred load addr
 
 init_size:		.long INIT_SIZE		# kernel initialization size
 handover_offset:	.long 0			# Filled in by build.c
+
+acpi_rsdp_addr:		.quad 0			# 64-bit physical pointer to the
+						# ACPI RSDP table, added with
+						# version 2.14
 
 # End of setup header #####################################################
 
