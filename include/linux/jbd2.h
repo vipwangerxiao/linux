@@ -575,6 +575,7 @@ struct transaction_s
 	enum {
 		T_RUNNING,
 		T_LOCKED,
+		T_SWITCH,
 		T_FLUSH,
 		T_COMMIT,
 		T_COMMIT_DFLUSH,
@@ -662,13 +663,13 @@ struct transaction_s
 
 	/*
 	 * Number of outstanding updates running on this transaction
-	 * [t_handle_lock]
+	 * [none]
 	 */
 	atomic_t		t_updates;
 
 	/*
 	 * Number of buffers reserved for use by all handles in this transaction
-	 * handle but not yet modified. [t_handle_lock]
+	 * handle but not yet modified. [none]
 	 */
 	atomic_t		t_outstanding_credits;
 
@@ -690,7 +691,7 @@ struct transaction_s
 	ktime_t			t_start_time;
 
 	/*
-	 * How many handles used this transaction? [t_handle_lock]
+	 * How many handles used this transaction? [none]
 	 */
 	atomic_t		t_handle_count;
 
@@ -1605,7 +1606,6 @@ static inline u32 jbd2_chksum(journal_t *journal, u32 crc,
 		JBD_MAX_CHECKSUM_SIZE);
 
 	desc.shash.tfm = journal->j_chksum_driver;
-	desc.shash.flags = 0;
 	*(u32 *)desc.ctx = crc;
 
 	err = crypto_shash_update(&desc.shash, address, length);

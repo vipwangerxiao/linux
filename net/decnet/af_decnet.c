@@ -192,7 +192,7 @@ static int check_port(__le16 port)
 static unsigned short port_alloc(struct sock *sk)
 {
 	struct dn_scp *scp = DN_SK(sk);
-static unsigned short port = 0x2000;
+	static unsigned short port = 0x2000;
 	unsigned short i_port = port;
 
 	while(check_port(cpu_to_le16(++port)) != 0) {
@@ -444,7 +444,7 @@ static void dn_destruct(struct sock *sk)
 	skb_queue_purge(&scp->other_xmit_queue);
 	skb_queue_purge(&scp->other_receive_queue);
 
-	dst_release(rcu_dereference_check(sk->sk_dst_cache, 1));
+	dst_release(rcu_dereference_protected(sk->sk_dst_cache, 1));
 }
 
 static unsigned long dn_memory_pressure;
@@ -2405,7 +2405,7 @@ static void __exit decnet_exit(void)
 
 	proto_unregister(&dn_proto);
 
-	rcu_barrier_bh(); /* Wait for completion of call_rcu_bh()'s */
+	rcu_barrier(); /* Wait for completion of call_rcu()'s */
 }
 module_exit(decnet_exit);
 #endif

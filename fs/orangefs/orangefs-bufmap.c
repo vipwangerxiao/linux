@@ -105,7 +105,7 @@ static int wait_for_free(struct slot_map *m)
 			left = t;
 		else
 			left = t + (left - n);
-		if (unlikely(signal_pending(current)))
+		if (signal_pending(current))
 			left = -EINTR;
 	} while (left > 0);
 
@@ -537,4 +537,17 @@ int orangefs_bufmap_copy_to_iovec(struct iov_iter *iter,
 		size -= n;
 	}
 	return 0;
+}
+
+void orangefs_bufmap_page_fill(void *page_to,
+				int buffer_index,
+				int slot_index)
+{
+	struct orangefs_bufmap_desc *from;
+	void *page_from;
+
+	from = &__orangefs_bufmap->desc_array[buffer_index];
+	page_from = kmap_atomic(from->page_array[slot_index]);
+	memcpy(page_to, page_from, PAGE_SIZE);
+	kunmap_atomic(page_from);
 }

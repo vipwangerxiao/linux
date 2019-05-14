@@ -36,7 +36,7 @@ endif
 
 ifneq ($(CSKYABI),)
 MCPU_STR = $(CPUTYPE)$(FPUEXT)$(VDSPEXT)$(TEEEXT)
-KBUILD_CFLAGS += -mcpu=$(MCPU_STR)
+KBUILD_CFLAGS += -mcpu=$(CPUTYPE) -Wa,-mcpu=$(MCPU_STR)
 KBUILD_CFLAGS += -DCSKYCPU_DEF_NAME=\"$(MCPU_STR)\"
 KBUILD_CFLAGS += -msoft-float -mdiv
 KBUILD_CFLAGS += -fno-tree-vectorize
@@ -45,6 +45,10 @@ endif
 KBUILD_CFLAGS += -pipe
 ifeq ($(CSKYABI),abiv2)
 KBUILD_CFLAGS += -mno-stack-size
+endif
+
+ifdef CONFIG_STACKTRACE
+KBUILD_CFLAGS += -mbacktrace
 endif
 
 abidirs := $(patsubst %,arch/csky/%/,$(CSKYABI))

@@ -153,7 +153,7 @@ void drbd_endio_write_sec_final(struct drbd_peer_request *peer_req) __releases(l
 	do_wake = list_empty(block_id == ID_SYNCER ? &device->sync_ee : &device->active_ee);
 
 	/* FIXME do we want to detach for failed REQ_OP_DISCARD?
-	 * ((peer_req->flags & (EE_WAS_ERROR|EE_IS_TRIM)) == EE_WAS_ERROR) */
+	 * ((peer_req->flags & (EE_WAS_ERROR|EE_TRIM)) == EE_WAS_ERROR) */
 	if (peer_req->flags & EE_WAS_ERROR)
 		__drbd_chk_io_error(device, DRBD_WRITE_ERROR);
 
@@ -304,7 +304,6 @@ void drbd_csum_ee(struct crypto_shash *tfm, struct drbd_peer_request *peer_req, 
 	void *src;
 
 	desc->tfm = tfm;
-	desc->flags = 0;
 
 	crypto_shash_init(desc);
 
@@ -332,7 +331,6 @@ void drbd_csum_bio(struct crypto_shash *tfm, struct bio *bio, void *digest)
 	struct bvec_iter iter;
 
 	desc->tfm = tfm;
-	desc->flags = 0;
 
 	crypto_shash_init(desc);
 

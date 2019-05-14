@@ -7,11 +7,11 @@
 #include <linux/bpf.h>
 #include <linux/list.h>
 #include <linux/slab.h>
+#include <linux/capability.h>
 #include "percpu_freelist.h"
 
 #define QUEUE_STACK_CREATE_FLAG_MASK \
-	(BPF_F_NUMA_NODE | BPF_F_RDONLY | BPF_F_WRONLY)
-
+	(BPF_F_NUMA_NODE | BPF_F_ACCESS_MASK)
 
 struct bpf_queue_stack {
 	struct bpf_map map;
@@ -45,9 +45,14 @@ static bool queue_stack_map_is_full(struct bpf_queue_stack *qs)
 /* Called from syscall */
 static int queue_stack_map_alloc_check(union bpf_attr *attr)
 {
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
 	/* check sanity of attributes */
 	if (attr->max_entries == 0 || attr->key_size != 0 ||
-	    attr->map_flags & ~QUEUE_STACK_CREATE_FLAG_MASK)
+	    attr->value_size == 0 ||
+	    attr->map_flags & ~QUEUE_STACK_CREATE_FLAG_MASK ||
+	    !bpf_map_flags_access_ok(attr->map_flags))
 		return -EINVAL;
 
 	if (attr->value_size > KMALLOC_MAX_SIZE)
@@ -63,15 +68,10 @@ static struct bpf_map *queue_stack_map_alloc(union bpf_attr *attr)
 {
 	int ret, numa_node = bpf_map_attr_numa_node(attr);
 	struct bpf_queue_stack *qs;
-	u32 size, value_size;
-	u64 queue_size, cost;
+	u64 size, queue_size, cost;
 
-	size = attr->max_entries + 1;
-	value_size = attr->value_size;
-
-	queue_size = sizeof(*qs) + (u64) value_size * size;
-
-	cost = queue_size;
+	size = (u64) attr->max_entries + 1;
+	cost = queue_size = sizeof(*qs) + size * attr->value_size;
 	if (cost >= U32_MAX - PAGE_SIZE)
 		return ERR_PTR(-E2BIG);
 

@@ -29,10 +29,36 @@ static const struct inode_operations afs_symlink_inode_operations = {
 	.listxattr	= afs_listxattr,
 };
 
+static noinline void dump_vnode(struct afs_vnode *vnode, struct afs_vnode *parent_vnode)
+{
+	static unsigned long once_only;
+
+	pr_warn("kAFS: AFS vnode with undefined type %u\n",
+		vnode->status.type);
+	pr_warn("kAFS: A=%d m=%o s=%llx v=%llx\n",
+		vnode->status.abort_code,
+		vnode->status.mode,
+		vnode->status.size,
+		vnode->status.data_version);
+	pr_warn("kAFS: vnode %llx:%llx:%x\n",
+		vnode->fid.vid,
+		vnode->fid.vnode,
+		vnode->fid.unique);
+	if (parent_vnode)
+		pr_warn("kAFS: dir %llx:%llx:%x\n",
+			parent_vnode->fid.vid,
+			parent_vnode->fid.vnode,
+			parent_vnode->fid.unique);
+
+	if (!test_and_set_bit(0, &once_only))
+		dump_stack();
+}
+
 /*
  * Initialise an inode from the vnode status.
  */
-static int afs_inode_init_from_status(struct afs_vnode *vnode, struct key *key)
+static int afs_inode_init_from_status(struct afs_vnode *vnode, struct key *key,
+				      struct afs_vnode *parent_vnode)
 {
 	struct inode *inode = AFS_VNODE_TO_I(vnode);
 
@@ -80,12 +106,16 @@ static int afs_inode_init_from_status(struct afs_vnode *vnode, struct key *key)
 		inode_nohighmem(inode);
 		break;
 	default:
-		printk("kAFS: AFS vnode with undefined type\n");
+		dump_vnode(vnode, parent_vnode);
 		read_sequnlock_excl(&vnode->cb_lock);
 		return afs_protocol_error(NULL, -EBADMSG, afs_eproto_file_type);
 	}
 
-	inode->i_blocks		= 0;
+	/*
+	 * Estimate 512 bytes  blocks used, rounded up to nearest 1K
+	 * for consistency with other AFS clients.
+	 */
+	inode->i_blocks		= ((i_size_read(inode) + 1023) >> 10) << 1;
 	vnode->invalid_before	= vnode->status.data_version;
 
 	read_sequnlock_excl(&vnode->cb_lock);
@@ -216,9 +246,7 @@ struct inode *afs_iget_pseudo_dir(struct super_block *sb, bool root)
 	set_nlink(inode, 2);
 	inode->i_uid		= GLOBAL_ROOT_UID;
 	inode->i_gid		= GLOBAL_ROOT_GID;
-	inode->i_ctime.tv_sec	= get_seconds();
-	inode->i_ctime.tv_nsec	= 0;
-	inode->i_atime		= inode->i_mtime = inode->i_ctime;
+	inode->i_ctime = inode->i_atime = inode->i_mtime = current_time(inode);
 	inode->i_blocks		= 0;
 	inode_set_iversion_raw(inode, 0);
 	inode->i_generation	= 0;
@@ -272,7 +300,8 @@ static void afs_get_inode_cache(struct afs_vnode *vnode)
  */
 struct inode *afs_iget(struct super_block *sb, struct key *key,
 		       struct afs_fid *fid, struct afs_file_status *status,
-		       struct afs_callback *cb, struct afs_cb_interest *cbi)
+		       struct afs_callback *cb, struct afs_cb_interest *cbi,
+		       struct afs_vnode *parent_vnode)
 {
 	struct afs_iget_data data = { .fid = *fid };
 	struct afs_super_info *as;
@@ -329,7 +358,7 @@ struct inode *afs_iget(struct super_block *sb, struct key *key,
 		vnode->cb_expires_at += ktime_get_real_seconds();
 	}
 
-	ret = afs_inode_init_from_status(vnode, key);
+	ret = afs_inode_init_from_status(vnode, key, parent_vnode);
 	if (ret < 0)
 		goto bad_inode;
 
@@ -382,7 +411,7 @@ void afs_zap_data(struct afs_vnode *vnode)
 int afs_validate(struct afs_vnode *vnode, struct key *key)
 {
 	time64_t now = ktime_get_real_seconds();
-	bool valid = false;
+	bool valid;
 	int ret;
 
 	_enter("{v={%llx:%llu} fl=%lx},%x",
@@ -402,15 +431,20 @@ int afs_validate(struct afs_vnode *vnode, struct key *key)
 			vnode->cb_v_break = vnode->volume->cb_v_break;
 			valid = false;
 		} else if (vnode->status.type == AFS_FTYPE_DIR &&
-			   test_bit(AFS_VNODE_DIR_VALID, &vnode->flags) &&
-			   vnode->cb_expires_at - 10 > now) {
-			valid = true;
-		} else if (!test_bit(AFS_VNODE_ZAP_DATA, &vnode->flags) &&
-			   vnode->cb_expires_at - 10 > now) {
+			   (!test_bit(AFS_VNODE_DIR_VALID, &vnode->flags) ||
+			    vnode->cb_expires_at - 10 <= now)) {
+			valid = false;
+		} else if (test_bit(AFS_VNODE_ZAP_DATA, &vnode->flags) ||
+			   vnode->cb_expires_at - 10 <= now) {
+			valid = false;
+		} else {
 			valid = true;
 		}
 	} else if (test_bit(AFS_VNODE_DELETED, &vnode->flags)) {
 		valid = true;
+	} else {
+		vnode->cb_v_break = vnode->volume->cb_v_break;
+		valid = false;
 	}
 
 	read_sequnlock_excl(&vnode->cb_lock);
@@ -540,6 +574,10 @@ void afs_evict_inode(struct inode *inode)
 #endif
 
 	afs_put_permits(rcu_access_pointer(vnode->permit_cache));
+	key_put(vnode->silly_key);
+	vnode->silly_key = NULL;
+	key_put(vnode->lock_key);
+	vnode->lock_key = NULL;
 	_leave("");
 }
 

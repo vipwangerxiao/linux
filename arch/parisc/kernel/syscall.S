@@ -48,7 +48,7 @@ registers).
 	 */
 #define KILL_INSN	break	0,0
 
-	.level          LEVEL
+	.level          PA_ASM_LEVEL
 
 	.text
 
@@ -640,7 +640,9 @@ cas_action:
 	sub,<>	%r28, %r25, %r0
 2:	stw	%r24, 0(%r26)
 	/* Free lock */
-	sync
+#ifdef CONFIG_SMP
+	LDCW	0(%sr2,%r20), %r1			/* Barrier */
+#endif
 	stw	%r20, 0(%sr2,%r20)
 #if ENABLE_LWS_DEBUG
 	/* Clear thread register indicator */
@@ -655,7 +657,9 @@ cas_action:
 3:		
 	/* Error occurred on load or store */
 	/* Free lock */
-	sync
+#ifdef CONFIG_SMP
+	LDCW	0(%sr2,%r20), %r1			/* Barrier */
+#endif
 	stw	%r20, 0(%sr2,%r20)
 #if ENABLE_LWS_DEBUG
 	stw	%r0, 4(%sr2,%r20)
@@ -857,7 +861,9 @@ cas2_action:
 
 cas2_end:
 	/* Free lock */
-	sync
+#ifdef CONFIG_SMP
+	LDCW	0(%sr2,%r20), %r1			/* Barrier */
+#endif
 	stw	%r20, 0(%sr2,%r20)
 	/* Enable interrupts */
 	ssm	PSW_SM_I, %r0
@@ -868,7 +874,9 @@ cas2_end:
 22:
 	/* Error occurred on load or store */
 	/* Free lock */
-	sync
+#ifdef CONFIG_SMP
+	LDCW	0(%sr2,%r20), %r1			/* Barrier */
+#endif
 	stw	%r20, 0(%sr2,%r20)
 	ssm	PSW_SM_I, %r0
 	ldo	1(%r0),%r28
@@ -923,19 +931,24 @@ ENTRY(lws_table)
 END(lws_table)
 	/* End of lws table */
 
+#define __SYSCALL(nr, entry, nargs) ASM_ULONG_INSN entry
 	.align 8
 ENTRY(sys_call_table)
 	.export sys_call_table,data
-#include "syscall_table.S"
+#ifdef CONFIG_64BIT
+#include <asm/syscall_table_c32.h>   /* Compat syscalls */
+#else
+#include <asm/syscall_table_32.h>    /* 32-bit native syscalls */
+#endif
 END(sys_call_table)
 
 #ifdef CONFIG_64BIT
 	.align 8
 ENTRY(sys_call_table64)
-#define SYSCALL_TABLE_64BIT
-#include "syscall_table.S"
+#include <asm/syscall_table_64.h>    /* 64-bit native syscalls */
 END(sys_call_table64)
 #endif
+#undef __SYSCALL
 
 	/*
 		All light-weight-syscall atomic operations 

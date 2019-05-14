@@ -20,6 +20,7 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/stmp_device.h>
+#include <linux/clk.h>
 
 #include <crypto/aes.h>
 #include <crypto/sha.h>
@@ -82,6 +83,7 @@ struct dcp {
 	spinlock_t			lock[DCP_MAX_CHANS];
 	struct task_struct		*thread[DCP_MAX_CHANS];
 	struct crypto_queue		queue[DCP_MAX_CHANS];
+	struct clk			*dcp_clk;
 };
 
 enum dcp_chan {
@@ -469,7 +471,7 @@ static int mxs_dcp_aes_enqueue(struct ablkcipher_request *req, int enc, int ecb)
 
 	wake_up_process(sdcp->thread[actx->chan]);
 
-	return -EINPROGRESS;
+	return ret;
 }
 
 static int mxs_dcp_aes_ecb_decrypt(struct ablkcipher_request *req)
@@ -698,11 +700,7 @@ static int dcp_chan_thread_sha(void *data)
 
 	struct crypto_async_request *backlog;
 	struct crypto_async_request *arq;
-
-	struct dcp_sha_req_ctx *rctx;
-
-	struct ahash_request *req;
-	int ret, fini;
+	int ret;
 
 	while (!kthread_should_stop()) {
 		set_current_state(TASK_INTERRUPTIBLE);
@@ -723,11 +721,7 @@ static int dcp_chan_thread_sha(void *data)
 			backlog->complete(backlog, -EINPROGRESS);
 
 		if (arq) {
-			req = ahash_request_cast(arq);
-			rctx = ahash_request_ctx(req);
-
 			ret = dcp_sha_req_to_buf(arq);
-			fini = rctx->fini;
 			arq->complete(arq, ret);
 		}
 	}
@@ -795,7 +789,7 @@ static int dcp_sha_update_fx(struct ahash_request *req, int fini)
 	wake_up_process(sdcp->thread[actx->chan]);
 	mutex_unlock(&actx->mutex);
 
-	return -EINPROGRESS;
+	return ret;
 }
 
 static int dcp_sha_update(struct ahash_request *req)
@@ -1053,10 +1047,23 @@ static int mxs_dcp_probe(struct platform_device *pdev)
 	/* Re-align the structure so it fits the DCP constraints. */
 	sdcp->coh = PTR_ALIGN(sdcp->coh, DCP_ALIGNMENT);
 
-	/* Restart the DCP block. */
-	ret = stmp_reset_block(sdcp->base);
+	/* DCP clock is optional, only used on some SOCs */
+	sdcp->dcp_clk = devm_clk_get(dev, "dcp");
+	if (IS_ERR(sdcp->dcp_clk)) {
+		if (sdcp->dcp_clk != ERR_PTR(-ENOENT))
+			return PTR_ERR(sdcp->dcp_clk);
+		sdcp->dcp_clk = NULL;
+	}
+	ret = clk_prepare_enable(sdcp->dcp_clk);
 	if (ret)
 		return ret;
+
+	/* Restart the DCP block. */
+	ret = stmp_reset_block(sdcp->base);
+	if (ret) {
+		dev_err(dev, "Failed reset\n");
+		goto err_disable_unprepare_clk;
+	}
 
 	/* Initialize control register. */
 	writel(MXS_DCP_CTRL_GATHER_RESIDUAL_WRITES |
@@ -1094,7 +1101,8 @@ static int mxs_dcp_probe(struct platform_device *pdev)
 						      NULL, "mxs_dcp_chan/sha");
 	if (IS_ERR(sdcp->thread[DCP_CHAN_HASH_SHA])) {
 		dev_err(dev, "Error starting SHA thread!\n");
-		return PTR_ERR(sdcp->thread[DCP_CHAN_HASH_SHA]);
+		ret = PTR_ERR(sdcp->thread[DCP_CHAN_HASH_SHA]);
+		goto err_disable_unprepare_clk;
 	}
 
 	sdcp->thread[DCP_CHAN_CRYPTO] = kthread_run(dcp_chan_thread_aes,
@@ -1151,6 +1159,10 @@ err_destroy_aes_thread:
 
 err_destroy_sha_thread:
 	kthread_stop(sdcp->thread[DCP_CHAN_HASH_SHA]);
+
+err_disable_unprepare_clk:
+	clk_disable_unprepare(sdcp->dcp_clk);
+
 	return ret;
 }
 
@@ -1169,6 +1181,8 @@ static int mxs_dcp_remove(struct platform_device *pdev)
 
 	kthread_stop(sdcp->thread[DCP_CHAN_HASH_SHA]);
 	kthread_stop(sdcp->thread[DCP_CHAN_CRYPTO]);
+
+	clk_disable_unprepare(sdcp->dcp_clk);
 
 	platform_set_drvdata(pdev, NULL);
 

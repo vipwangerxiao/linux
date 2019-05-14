@@ -783,7 +783,7 @@ static int hisi_nfc_probe(struct platform_device *pdev)
 	nand_set_controller_data(chip, host);
 	nand_set_flash_node(chip, np);
 	chip->legacy.cmdfunc	= hisi_nfc_cmdfunc;
-	chip->select_chip	= hisi_nfc_select_chip;
+	chip->legacy.select_chip	= hisi_nfc_select_chip;
 	chip->legacy.read_byte	= hisi_nfc_read_byte;
 	chip->legacy.write_buf	= hisi_nfc_write_buf;
 	chip->legacy.read_buf	= hisi_nfc_read_buf;
@@ -799,7 +799,7 @@ static int hisi_nfc_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	chip->dummy_controller.ops = &hisi_nfc_controller_ops;
+	chip->legacy.dummy_controller.ops = &hisi_nfc_controller_ops;
 	ret = nand_scan(chip, max_chips);
 	if (ret)
 		return ret;
@@ -849,7 +849,7 @@ static int hisi_nfc_resume(struct device *dev)
 	struct hinfc_host *host = dev_get_drvdata(dev);
 	struct nand_chip *chip = &host->chip;
 
-	for (cs = 0; cs < chip->numchips; cs++)
+	for (cs = 0; cs < nanddev_ntargets(&chip->base); cs++)
 		hisi_nfc_send_cmd_reset(host, cs);
 	hinfc_write(host, SET_HINFC504_PWIDTH(HINFC504_W_LATCH,
 		    HINFC504_R_LATCH, HINFC504_RW_LATCH), HINFC504_PWIDTH);

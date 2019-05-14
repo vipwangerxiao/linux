@@ -22,22 +22,6 @@
 #include <linux/vmalloc.h>
 #include <linux/rtnetlink.h>
 
-struct backend_info {
-	struct xenbus_device *dev;
-	struct xenvif *vif;
-
-	/* This is the state that will be reflected in xenstore when any
-	 * active hotplug script completes.
-	 */
-	enum xenbus_state state;
-
-	enum xenbus_state frontend_state;
-	struct xenbus_watch hotplug_status_watch;
-	u8 have_hotplug_status_watch:1;
-
-	const char *hotplug_script;
-};
-
 static int connect_data_rings(struct backend_info *be,
 			      struct xenvif_queue *queue);
 static void connect(struct backend_info *be);
@@ -186,7 +170,7 @@ static const struct file_operations xenvif_dbg_io_ring_ops_fops = {
 	.write = xenvif_write_io_ring,
 };
 
-static int xenvif_read_ctrl(struct seq_file *m, void *v)
+static int xenvif_ctrl_show(struct seq_file *m, void *v)
 {
 	struct xenvif *vif = m->private;
 
@@ -194,19 +178,7 @@ static int xenvif_read_ctrl(struct seq_file *m, void *v)
 
 	return 0;
 }
-
-static int xenvif_ctrl_open(struct inode *inode, struct file *filp)
-{
-	return single_open(filp, xenvif_read_ctrl, inode->i_private);
-}
-
-static const struct file_operations xenvif_dbg_ctrl_ops_fops = {
-	.owner = THIS_MODULE,
-	.open = xenvif_ctrl_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-};
+DEFINE_SHOW_ATTRIBUTE(xenvif_ctrl);
 
 static void xenvif_debugfs_addif(struct xenvif *vif)
 {
@@ -238,7 +210,7 @@ static void xenvif_debugfs_addif(struct xenvif *vif)
 						    0400,
 						    vif->xenvif_dbg_root,
 						    vif,
-						    &xenvif_dbg_ctrl_ops_fops);
+						    &xenvif_ctrl_fops);
 			if (IS_ERR_OR_NULL(pfile))
 				pr_warn("Creation of ctrl file returned %ld!\n",
 					PTR_ERR(pfile));
@@ -484,6 +456,7 @@ static int backend_create_xenvif(struct backend_info *be)
 		return err;
 	}
 	be->vif = vif;
+	vif->be = be;
 
 	kobject_uevent(&dev->dev.kobj, KOBJ_ONLINE);
 	return 0;
@@ -667,7 +640,7 @@ static void frontend_changed(struct xenbus_device *dev,
 		set_backend_state(be, XenbusStateClosed);
 		if (xenbus_dev_is_online(dev))
 			break;
-		/* fall through if not online */
+		/* fall through - if not online */
 	case XenbusStateUnknown:
 		set_backend_state(be, XenbusStateClosed);
 		device_unregister(&dev->dev);

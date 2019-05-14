@@ -382,6 +382,7 @@ static int vce_v4_0_start(struct amdgpu_device *adev)
 static int vce_v4_0_stop(struct amdgpu_device *adev)
 {
 
+	/* Disable VCPU */
 	WREG32_P(SOC15_REG_OFFSET(VCE, 0, mmVCE_VCPU_CNTL), 0, ~0x200001);
 
 	/* hold on ECPU */
@@ -389,8 +390,8 @@ static int vce_v4_0_stop(struct amdgpu_device *adev)
 			VCE_SOFT_RESET__ECPU_SOFT_RESET_MASK,
 			~VCE_SOFT_RESET__ECPU_SOFT_RESET_MASK);
 
-	/* clear BUSY flag */
-	WREG32_P(SOC15_REG_OFFSET(VCE, 0, mmVCE_STATUS), 0, ~VCE_STATUS__JOB_BUSY_MASK);
+	/* clear VCE_STATUS */
+	WREG32(SOC15_REG_OFFSET(VCE, 0, mmVCE_STATUS), 0);
 
 	/* Set Clock-Gating off */
 	/* if (adev->cg_flags & AMD_CG_SUPPORT_VCE_MGCG)
@@ -466,9 +467,9 @@ static int vce_v4_0_sw_init(void *handle)
 			 * so set unused location for other unused rings.
 			 */
 			if (i == 0)
-				ring->doorbell_index = AMDGPU_DOORBELL64_VCE_RING0_1 * 2;
+				ring->doorbell_index = adev->doorbell_index.uvd_vce.vce_ring0_1 * 2;
 			else
-				ring->doorbell_index = AMDGPU_DOORBELL64_VCE_RING2_3 * 2 + 1;
+				ring->doorbell_index = adev->doorbell_index.uvd_vce.vce_ring2_3 * 2 + 1;
 		}
 		r = amdgpu_ring_init(adev, ring, 512, &adev->vce.irq, 0);
 		if (r)
@@ -519,15 +520,10 @@ static int vce_v4_0_hw_init(void *handle)
 	if (r)
 		return r;
 
-	for (i = 0; i < adev->vce.num_rings; i++)
-		adev->vce.ring[i].ready = false;
-
 	for (i = 0; i < adev->vce.num_rings; i++) {
-		r = amdgpu_ring_test_ring(&adev->vce.ring[i]);
+		r = amdgpu_ring_test_helper(&adev->vce.ring[i]);
 		if (r)
 			return r;
-		else
-			adev->vce.ring[i].ready = true;
 	}
 
 	DRM_INFO("VCE initialized successfully.\n");
@@ -549,7 +545,7 @@ static int vce_v4_0_hw_fini(void *handle)
 	}
 
 	for (i = 0; i < adev->vce.num_rings; i++)
-		adev->vce.ring[i].ready = false;
+		adev->vce.ring[i].sched.ready = false;
 
 	return 0;
 }
@@ -927,6 +923,7 @@ static int vce_v4_0_set_clockgating_state(void *handle,
 
 	return 0;
 }
+#endif
 
 static int vce_v4_0_set_powergating_state(void *handle,
 					  enum amd_powergating_state state)
@@ -940,20 +937,17 @@ static int vce_v4_0_set_powergating_state(void *handle,
 	 */
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
-	if (!(adev->pg_flags & AMD_PG_SUPPORT_VCE))
-		return 0;
-
 	if (state == AMD_PG_STATE_GATE)
-		/* XXX do we need a vce_v4_0_stop()? */
-		return 0;
+		return vce_v4_0_stop(adev);
 	else
 		return vce_v4_0_start(adev);
 }
-#endif
 
-static void vce_v4_0_ring_emit_ib(struct amdgpu_ring *ring,
-		struct amdgpu_ib *ib, unsigned int vmid, bool ctx_switch)
+static void vce_v4_0_ring_emit_ib(struct amdgpu_ring *ring, struct amdgpu_job *job,
+					struct amdgpu_ib *ib, uint32_t flags)
 {
+	unsigned vmid = AMDGPU_JOB_GET_VMID(job);
+
 	amdgpu_ring_write(ring, VCE_CMD_IB_VM);
 	amdgpu_ring_write(ring, vmid);
 	amdgpu_ring_write(ring, lower_32_bits(ib->gpu_addr));
@@ -1062,7 +1056,7 @@ const struct amd_ip_funcs vce_v4_0_ip_funcs = {
 	.soft_reset = NULL /* vce_v4_0_soft_reset */,
 	.post_soft_reset = NULL /* vce_v4_0_post_soft_reset */,
 	.set_clockgating_state = vce_v4_0_set_clockgating_state,
-	.set_powergating_state = NULL /* vce_v4_0_set_powergating_state */,
+	.set_powergating_state = vce_v4_0_set_powergating_state,
 };
 
 static const struct amdgpu_ring_funcs vce_v4_0_ring_vm_funcs = {

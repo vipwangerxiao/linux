@@ -132,7 +132,8 @@ static int dsmark_change(struct Qdisc *sch, u32 classid, u32 parent,
 	if (!opt)
 		goto errout;
 
-	err = nla_parse_nested(tb, TCA_DSMARK_MAX, opt, dsmark_policy, NULL);
+	err = nla_parse_nested_deprecated(tb, TCA_DSMARK_MAX, opt,
+					  dsmark_policy, NULL);
 	if (err < 0)
 		goto errout;
 
@@ -199,6 +200,7 @@ static struct tcf_block *dsmark_tcf_block(struct Qdisc *sch, unsigned long cl,
 static int dsmark_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 			  struct sk_buff **to_free)
 {
+	unsigned int len = qdisc_pkt_len(skb);
 	struct dsmark_qdisc_data *p = qdisc_priv(sch);
 	int err;
 
@@ -271,7 +273,7 @@ static int dsmark_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		return err;
 	}
 
-	qdisc_qstats_backlog_inc(sch, skb);
+	sch->qstats.backlog += len;
 	sch->q.qlen++;
 
 	return NET_XMIT_SUCCESS;
@@ -352,7 +354,8 @@ static int dsmark_init(struct Qdisc *sch, struct nlattr *opt,
 	if (err)
 		return err;
 
-	err = nla_parse_nested(tb, TCA_DSMARK_MAX, opt, dsmark_policy, NULL);
+	err = nla_parse_nested_deprecated(tb, TCA_DSMARK_MAX, opt,
+					  dsmark_policy, NULL);
 	if (err < 0)
 		goto errout;
 
@@ -431,7 +434,7 @@ static int dsmark_dump_class(struct Qdisc *sch, unsigned long cl,
 	tcm->tcm_handle = TC_H_MAKE(TC_H_MAJ(sch->handle), cl - 1);
 	tcm->tcm_info = p->q->handle;
 
-	opts = nla_nest_start(skb, TCA_OPTIONS);
+	opts = nla_nest_start_noflag(skb, TCA_OPTIONS);
 	if (opts == NULL)
 		goto nla_put_failure;
 	if (nla_put_u8(skb, TCA_DSMARK_MASK, p->mv[cl - 1].mask) ||
@@ -450,7 +453,7 @@ static int dsmark_dump(struct Qdisc *sch, struct sk_buff *skb)
 	struct dsmark_qdisc_data *p = qdisc_priv(sch);
 	struct nlattr *opts = NULL;
 
-	opts = nla_nest_start(skb, TCA_OPTIONS);
+	opts = nla_nest_start_noflag(skb, TCA_OPTIONS);
 	if (opts == NULL)
 		goto nla_put_failure;
 	if (nla_put_u16(skb, TCA_DSMARK_INDICES, p->indices))

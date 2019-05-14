@@ -1601,8 +1601,6 @@ static int fd_locked_ioctl(struct block_device *bdev, fmode_t mode,
 			return p->type->read_size;
 #endif
 	default:
-		printk(KERN_DEBUG "fd_ioctl: unknown cmd %d for drive %d.",
-		       cmd, drive);
 		return -ENOSYS;
 	}
 	return 0;
@@ -1831,6 +1829,7 @@ static int __init fd_probe_drives(void)
 		disk->major = FLOPPY_MAJOR;
 		disk->first_minor = drive;
 		disk->fops = &floppy_fops;
+		disk->events = DISK_EVENT_MEDIA_CHANGE;
 		sprintf(disk->disk_name, "fd%d", drive);
 		disk->private_data = &unit[drive];
 		set_capacity(disk, 880*2);

@@ -380,8 +380,8 @@ static int ocrdma_alloc_q(struct ocrdma_dev *dev,
 	q->len = len;
 	q->entry_size = entry_size;
 	q->size = len * entry_size;
-	q->va = dma_zalloc_coherent(&dev->nic_info.pdev->dev, q->size,
-				    &q->dma, GFP_KERNEL);
+	q->va = dma_alloc_coherent(&dev->nic_info.pdev->dev, q->size, &q->dma,
+				   GFP_KERNEL);
 	if (!q->va)
 		return -ENOMEM;
 	return 0;
@@ -1819,7 +1819,7 @@ int ocrdma_mbx_create_cq(struct ocrdma_dev *dev, struct ocrdma_cq *cq,
 		return -ENOMEM;
 	ocrdma_init_mch(&cmd->cmd.req, OCRDMA_CMD_CREATE_CQ,
 			OCRDMA_SUBSYS_COMMON, sizeof(*cmd));
-	cq->va = dma_zalloc_coherent(&pdev->dev, cq->len, &cq->pa, GFP_KERNEL);
+	cq->va = dma_alloc_coherent(&pdev->dev, cq->len, &cq->pa, GFP_KERNEL);
 	if (!cq->va) {
 		status = -ENOMEM;
 		goto mem_err;
@@ -2209,7 +2209,7 @@ static int ocrdma_set_create_qp_sq_cmd(struct ocrdma_create_qp_req *cmd,
 	qp->sq.max_cnt = max_wqe_allocated;
 	len = (hw_pages * hw_page_size);
 
-	qp->sq.va = dma_zalloc_coherent(&pdev->dev, len, &pa, GFP_KERNEL);
+	qp->sq.va = dma_alloc_coherent(&pdev->dev, len, &pa, GFP_KERNEL);
 	if (!qp->sq.va)
 		return -EINVAL;
 	qp->sq.len = len;
@@ -2259,7 +2259,7 @@ static int ocrdma_set_create_qp_rq_cmd(struct ocrdma_create_qp_req *cmd,
 	qp->rq.max_cnt = max_rqe_allocated;
 	len = (hw_pages * hw_page_size);
 
-	qp->rq.va = dma_zalloc_coherent(&pdev->dev, len, &pa, GFP_KERNEL);
+	qp->rq.va = dma_alloc_coherent(&pdev->dev, len, &pa, GFP_KERNEL);
 	if (!qp->rq.va)
 		return -ENOMEM;
 	qp->rq.pa = pa;
@@ -2315,8 +2315,8 @@ static int ocrdma_set_create_qp_ird_cmd(struct ocrdma_create_qp_req *cmd,
 	if (dev->attr.ird == 0)
 		return 0;
 
-	qp->ird_q_va = dma_zalloc_coherent(&pdev->dev, ird_q_len, &pa,
-					   GFP_KERNEL);
+	qp->ird_q_va = dma_alloc_coherent(&pdev->dev, ird_q_len, &pa,
+					  GFP_KERNEL);
 	if (!qp->ird_q_va)
 		return -ENOMEM;
 	ocrdma_build_q_pages(&cmd->ird_addr[0], dev->attr.num_ird_pages,
@@ -2496,7 +2496,7 @@ static int ocrdma_set_av_params(struct ocrdma_qp *qp,
 	int status;
 	struct rdma_ah_attr *ah_attr = &attrs->ah_attr;
 	const struct ib_gid_attr *sgid_attr;
-	u32 vlan_id = 0xFFFF;
+	u16 vlan_id = 0xFFFF;
 	u8 mac_addr[6], hdr_type;
 	union {
 		struct sockaddr     _sockaddr;
@@ -2526,8 +2526,9 @@ static int ocrdma_set_av_params(struct ocrdma_qp *qp,
 	       sizeof(cmd->params.dgid));
 
 	sgid_attr = ah_attr->grh.sgid_attr;
-	vlan_id = rdma_vlan_dev_vlan_id(sgid_attr->ndev);
-	memcpy(mac_addr, sgid_attr->ndev->dev_addr, ETH_ALEN);
+	status = rdma_read_gid_l2_fields(sgid_attr, &vlan_id, &mac_addr[0]);
+	if (status)
+		return status;
 
 	qp->sgid_idx = grh->sgid_index;
 	memcpy(&cmd->params.sgid[0], &sgid_attr->gid.raw[0],
@@ -2863,21 +2864,19 @@ int ocrdma_mbx_query_srq(struct ocrdma_srq *srq, struct ib_srq_attr *srq_attr)
 	return status;
 }
 
-int ocrdma_mbx_destroy_srq(struct ocrdma_dev *dev, struct ocrdma_srq *srq)
+void ocrdma_mbx_destroy_srq(struct ocrdma_dev *dev, struct ocrdma_srq *srq)
 {
-	int status = -ENOMEM;
 	struct ocrdma_destroy_srq *cmd;
 	struct pci_dev *pdev = dev->nic_info.pdev;
 	cmd = ocrdma_init_emb_mqe(OCRDMA_CMD_DELETE_SRQ, sizeof(*cmd));
 	if (!cmd)
-		return status;
+		return;
 	cmd->id = srq->id;
-	status = ocrdma_mbx_cmd(dev, (struct ocrdma_mqe *)cmd);
+	ocrdma_mbx_cmd(dev, (struct ocrdma_mqe *)cmd);
 	if (srq->rq.va)
 		dma_free_coherent(&pdev->dev, srq->rq.len,
 				  srq->rq.va, srq->rq.pa);
 	kfree(cmd);
-	return status;
 }
 
 static int ocrdma_mbx_get_dcbx_config(struct ocrdma_dev *dev, u32 ptype,
@@ -3067,13 +3066,12 @@ int ocrdma_alloc_av(struct ocrdma_dev *dev, struct ocrdma_ah *ah)
 	return status;
 }
 
-int ocrdma_free_av(struct ocrdma_dev *dev, struct ocrdma_ah *ah)
+void ocrdma_free_av(struct ocrdma_dev *dev, struct ocrdma_ah *ah)
 {
 	unsigned long flags;
 	spin_lock_irqsave(&dev->av_tbl.lock, flags);
 	ah->av->valid = 0;
 	spin_unlock_irqrestore(&dev->av_tbl.lock, flags);
-	return 0;
 }
 
 static int ocrdma_create_eqs(struct ocrdma_dev *dev)
