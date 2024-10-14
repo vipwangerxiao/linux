@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * thmc50.c - Part of lm_sensors, Linux kernel modules for hardware
  *	      monitoring
  * Copyright (C) 2007 Krzysztof Helt <krzysztof.h1@wp.pl>
  * Based on 2.4 driver by Frodo Looijaard <frodol@dds.nl> and
  * Philip Edelbrock <phil@netroedge.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/module.h>
@@ -75,7 +62,7 @@ struct thmc50_data {
 	enum chips type;
 	unsigned long last_updated;	/* In jiffies */
 	char has_temp3;		/* !=0 if it is ADM1022 in temp3 mode */
-	char valid;		/* !=0 if following fields are valid */
+	bool valid;		/* true if following fields are valid */
 
 	/* Register values */
 	s8 temp_input[3];
@@ -120,7 +107,7 @@ static struct thmc50_data *thmc50_update_device(struct device *dev)
 		data->alarms =
 		    i2c_smbus_read_byte_data(client, THMC50_REG_INTR);
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 	}
 
 	mutex_unlock(&data->update_lock);
@@ -365,7 +352,7 @@ static int thmc50_detect(struct i2c_client *client,
 	pr_debug("thmc50: Detected %s (version %x, revision %x)\n",
 		 type_name, (revision >> 4) - 0xc, revision & 0xf);
 
-	strlcpy(info->type, type_name, I2C_NAME_SIZE);
+	strscpy(info->type, type_name, I2C_NAME_SIZE);
 
 	return 0;
 }
@@ -390,8 +377,7 @@ static void thmc50_init_client(struct thmc50_data *data)
 	i2c_smbus_write_byte_data(client, THMC50_REG_CONF, config);
 }
 
-static int thmc50_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int thmc50_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct thmc50_data *data;
@@ -403,7 +389,7 @@ static int thmc50_probe(struct i2c_client *client,
 		return -ENOMEM;
 
 	data->client = client;
-	data->type = id->driver_data;
+	data->type = (uintptr_t)i2c_get_match_data(client);
 	mutex_init(&data->update_lock);
 
 	thmc50_init_client(data);

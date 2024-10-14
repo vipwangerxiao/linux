@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * CXL Flash Device Driver
  *
@@ -5,11 +6,6 @@
  *             Matthew R. Ochs <mrochs@linux.vnet.ibm.com>, IBM Corporation
  *
  * Copyright (C) 2015 IBM Corporation
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #ifndef _CXLFLASH_SUPERPIPE_H
@@ -118,18 +114,16 @@ struct cxlflash_global {
 	struct page *err_page; /* One page of all 0xF for error notification */
 };
 
-int cxlflash_vlun_resize(struct scsi_device *sdev,
-			 struct dk_cxlflash_resize *resize);
+int cxlflash_vlun_resize(struct scsi_device *sdev, void *resize);
 int _cxlflash_vlun_resize(struct scsi_device *sdev, struct ctx_info *ctxi,
 			  struct dk_cxlflash_resize *resize);
 
 int cxlflash_disk_release(struct scsi_device *sdev,
-			  struct dk_cxlflash_release *release);
+			  void *release);
 int _cxlflash_disk_release(struct scsi_device *sdev, struct ctx_info *ctxi,
 			   struct dk_cxlflash_release *release);
 
-int cxlflash_disk_clone(struct scsi_device *sdev,
-			struct dk_cxlflash_clone *clone);
+int cxlflash_disk_clone(struct scsi_device *sdev, void *arg);
 
 int cxlflash_disk_virtual_open(struct scsi_device *sdev, void *arg);
 
@@ -149,8 +143,7 @@ void rhte_checkin(struct ctx_info *ctxi, struct sisl_rht_entry *rhte);
 
 void cxlflash_ba_terminate(struct ba_lun *ba_lun);
 
-int cxlflash_manage_lun(struct scsi_device *sdev,
-			struct dk_cxlflash_manage_lun *manage);
+int cxlflash_manage_lun(struct scsi_device *sdev, void *manage);
 
 int check_state(struct cxlflash_cfg *cfg);
 

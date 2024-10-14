@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Regulators driver for Maxim max8925
  *
  * Copyright (C) 2009 Marvell International Ltd.
  *      Haojian Zhuang <haojian.zhuang@marvell.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -266,6 +263,7 @@ static int max8925_regulator_probe(struct platform_device *pdev)
 static struct platform_driver max8925_regulator_driver = {
 	.driver		= {
 		.name	= "max8925-regulator",
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 	.probe		= max8925_regulator_probe,
 };

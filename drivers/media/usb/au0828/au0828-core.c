@@ -1,18 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Driver for the Auvitek USB bridge
  *
  *  Copyright (c) 2008 Steven Toth <stoth@linuxtv.org>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *
- *  GNU General Public License for more details.
  */
 
 #include "au0828.h"
@@ -209,8 +199,8 @@ static int au0828_media_device_init(struct au0828_dev *dev,
 	struct media_device *mdev;
 
 	mdev = media_device_usb_allocate(udev, KBUILD_MODNAME, THIS_MODULE);
-	if (!mdev)
-		return -ENOMEM;
+	if (IS_ERR(mdev))
+		return PTR_ERR(mdev);
 
 	dev->media_dev = mdev;
 #endif
@@ -221,7 +211,7 @@ static int au0828_media_device_init(struct au0828_dev *dev,
 static void au0828_media_graph_notify(struct media_entity *new,
 				      void *notify_data)
 {
-	struct au0828_dev *dev = (struct au0828_dev *) notify_data;
+	struct au0828_dev *dev = notify_data;
 	int ret;
 	struct media_entity *entity, *mixer = NULL, *decoder = NULL;
 
@@ -260,7 +250,7 @@ static void au0828_media_graph_notify(struct media_entity *new,
 
 create_link:
 	if (decoder && mixer) {
-		ret = media_get_pad_index(decoder, false,
+		ret = media_get_pad_index(decoder, MEDIA_PAD_FL_SOURCE,
 					  PAD_SIGNAL_AUDIO);
 		if (ret >= 0)
 			ret = media_create_pad_link(decoder, ret,
@@ -420,7 +410,7 @@ static int au0828_enable_source(struct media_entity *entity,
 		goto end;
 	}
 
-	ret = __media_pipeline_start(entity, pipe);
+	ret = __media_pipeline_start(entity->pads, pipe);
 	if (ret) {
 		pr_err("Start Pipeline: %s->%s Error %d\n",
 			source->name, entity->name, ret);
@@ -511,12 +501,12 @@ static void au0828_disable_source(struct media_entity *entity)
 				return;
 
 			/* stop pipeline */
-			__media_pipeline_stop(dev->active_link_owner);
+			__media_pipeline_stop(dev->active_link_owner->pads);
 			pr_debug("Pipeline stop for %s\n",
 				dev->active_link_owner->name);
 
 			ret = __media_pipeline_start(
-					dev->active_link_user,
+					dev->active_link_user->pads,
 					dev->active_link_user_pipe);
 			if (ret) {
 				pr_err("Start Pipeline: %s->%s %d\n",
@@ -542,7 +532,7 @@ static void au0828_disable_source(struct media_entity *entity)
 			return;
 
 		/* stop pipeline */
-		__media_pipeline_stop(dev->active_link_owner);
+		__media_pipeline_stop(dev->active_link_owner->pads);
 		pr_debug("Pipeline stop for %s\n",
 			dev->active_link_owner->name);
 
@@ -637,14 +627,9 @@ static int au0828_media_device_register(struct au0828_dev *dev,
 	/* register entity_notify callback */
 	dev->entity_notify.notify_data = (void *) dev;
 	dev->entity_notify.notify = (void *) au0828_media_graph_notify;
-	ret = media_device_register_entity_notify(dev->media_dev,
+	media_device_register_entity_notify(dev->media_dev,
 						  &dev->entity_notify);
-	if (ret) {
-		dev_err(&udev->dev,
-			"Media Device register entity_notify Error: %d\n",
-			ret);
-		return ret;
-	}
+
 	/* set enable_source */
 	mutex_lock(&dev->media_dev->graph_mutex);
 	dev->media_dev->source_priv = (void *) dev;
@@ -729,6 +714,12 @@ static int au0828_usb_probe(struct usb_interface *interface,
 	/* Setup */
 	au0828_card_setup(dev);
 
+	/*
+	 * Store the pointer to the au0828_dev so it can be accessed in
+	 * au0828_usb_disconnect
+	 */
+	usb_set_intfdata(interface, dev);
+
 	/* Analog TV */
 	retval = au0828_analog_register(dev, interface);
 	if (retval) {
@@ -746,12 +737,6 @@ static int au0828_usb_probe(struct usb_interface *interface,
 
 	/* Remote controller */
 	au0828_rc_register(dev);
-
-	/*
-	 * Store the pointer to the au0828_dev so it can be accessed in
-	 * au0828_usb_disconnect
-	 */
-	usb_set_intfdata(interface, dev);
 
 	pr_info("Registered device AU0828 [%s]\n",
 		dev->board.name == NULL ? "Unset" : dev->board.name);

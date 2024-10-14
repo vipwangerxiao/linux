@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * drivers/media/radio/si470x/radio-si470x-i2c.c
  *
@@ -5,22 +6,12 @@
  *
  * Copyright (c) 2009 Samsung Electronics Co.Ltd
  * Author: Joonyoung Shim <jy0922.shim@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 
 /* driver definitions */
 #define DRIVER_AUTHOR "Joonyoung Shim <jy0922.shim@samsung.com>";
-#define DRIVER_CARD "Silicon Labs Si470x FM Radio Receiver"
+#define DRIVER_CARD "Silicon Labs Si470x FM Radio"
 #define DRIVER_DESC "I2C radio driver for Si470x FM Radio Receivers"
 #define DRIVER_VERSION "1.0.2"
 
@@ -37,7 +28,7 @@
 /* I2C Device ID List */
 static const struct i2c_device_id si470x_i2c_id[] = {
 	/* Generic Entry */
-	{ "si470x", 0 },
+	{ "si470x" },
 	/* Terminating entry */
 	{ }
 };
@@ -232,10 +223,6 @@ static int si470x_vidioc_querycap(struct file *file, void *priv,
 {
 	strscpy(capability->driver, DRIVER_NAME, sizeof(capability->driver));
 	strscpy(capability->card, DRIVER_CARD, sizeof(capability->card));
-	capability->device_caps = V4L2_CAP_HW_FREQ_SEEK | V4L2_CAP_READWRITE |
-		V4L2_CAP_TUNER | V4L2_CAP_RADIO | V4L2_CAP_RDS_CAPTURE;
-	capability->capabilities = capability->device_caps | V4L2_CAP_DEVICE_CAPS;
-
 	return 0;
 }
 
@@ -343,12 +330,10 @@ end:
 /*
  * si470x_i2c_probe - probe for the device
  */
-static int si470x_i2c_probe(struct i2c_client *client,
-			    const struct i2c_device_id *id)
+static int si470x_i2c_probe(struct i2c_client *client)
 {
 	struct si470x_device *radio;
 	int retval = 0;
-	unsigned char version_warning = 0;
 
 	/* private data allocation and initialization */
 	radio = devm_kzalloc(&client->dev, sizeof(*radio), GFP_KERNEL);
@@ -382,7 +367,7 @@ static int si470x_i2c_probe(struct i2c_client *client,
 	if (radio->hdl.error) {
 		retval = radio->hdl.error;
 		dev_err(&client->dev, "couldn't register control\n");
-		goto err_dev;
+		goto err_all;
 	}
 
 	/* video device initialization */
@@ -391,6 +376,9 @@ static int si470x_i2c_probe(struct i2c_client *client,
 	radio->videodev.lock = &radio->lock;
 	radio->videodev.v4l2_dev = &radio->v4l2_dev;
 	radio->videodev.release = video_device_release_empty;
+	radio->videodev.device_caps =
+		V4L2_CAP_HW_FREQ_SEEK | V4L2_CAP_READWRITE | V4L2_CAP_TUNER |
+		V4L2_CAP_RADIO | V4L2_CAP_RDS_CAPTURE;
 	video_set_drvdata(&radio->videodev, radio);
 
 	radio->gpio_reset = devm_gpiod_get_optional(&client->dev, "reset",
@@ -421,20 +409,10 @@ static int si470x_i2c_probe(struct i2c_client *client,
 			radio->registers[DEVICEID], radio->registers[SI_CHIPID]);
 	if ((radio->registers[SI_CHIPID] & SI_CHIPID_FIRMWARE) < RADIO_FW_VERSION) {
 		dev_warn(&client->dev,
-			"This driver is known to work with firmware version %hu,\n",
-			RADIO_FW_VERSION);
-		dev_warn(&client->dev,
-			"but the device has firmware version %hu.\n",
+			"This driver is known to work with firmware version %u, but the device has firmware version %u.\n"
+			"If you have some trouble using this driver, please report to V4L ML at linux-media@vger.kernel.org\n",
+			RADIO_FW_VERSION,
 			radio->registers[SI_CHIPID] & SI_CHIPID_FIRMWARE);
-		version_warning = 1;
-	}
-
-	/* give out version warning */
-	if (version_warning == 1) {
-		dev_warn(&client->dev,
-			"If you have some trouble using this driver,\n");
-		dev_warn(&client->dev,
-			"please report to V4L ML at linux-media@vger.kernel.org\n");
 	}
 
 	/* set initial frequency */
@@ -474,7 +452,6 @@ static int si470x_i2c_probe(struct i2c_client *client,
 	return 0;
 err_all:
 	v4l2_ctrl_handler_free(&radio->hdl);
-err_dev:
 	v4l2_device_unregister(&radio->v4l2_dev);
 err_initial:
 	return retval;
@@ -484,7 +461,7 @@ err_initial:
 /*
  * si470x_i2c_remove - remove the device
  */
-static int si470x_i2c_remove(struct i2c_client *client)
+static void si470x_i2c_remove(struct i2c_client *client)
 {
 	struct si470x_device *radio = i2c_get_clientdata(client);
 
@@ -493,7 +470,8 @@ static int si470x_i2c_remove(struct i2c_client *client)
 	if (radio->gpio_reset)
 		gpiod_set_value(radio->gpio_reset, 0);
 
-	return 0;
+	v4l2_ctrl_handler_free(&radio->hdl);
+	v4l2_device_unregister(&radio->v4l2_dev);
 }
 
 

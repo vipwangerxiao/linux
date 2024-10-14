@@ -1,44 +1,35 @@
 #include <linux/bpf.h>
-#include "bpf_helpers.h"
-#include "bpf_util.h"
-#include "bpf_endian.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+#include "bpf_misc.h"
 
-int _version SEC("version") = 1;
+struct {
+	__uint(type, BPF_MAP_TYPE_SOCKMAP);
+	__uint(max_entries, 20);
+	__type(key, int);
+	__type(value, int);
+} sock_map_rx SEC(".maps");
 
-#define bpf_printk(fmt, ...)					\
-({								\
-	       char ____fmt[] = fmt;				\
-	       bpf_trace_printk(____fmt, sizeof(____fmt),	\
-				##__VA_ARGS__);			\
-})
+struct {
+	__uint(type, BPF_MAP_TYPE_SOCKMAP);
+	__uint(max_entries, 20);
+	__type(key, int);
+	__type(value, int);
+} sock_map_tx SEC(".maps");
 
-struct bpf_map_def SEC("maps") sock_map_rx = {
-	.type = BPF_MAP_TYPE_SOCKMAP,
-	.key_size = sizeof(int),
-	.value_size = sizeof(int),
-	.max_entries = 20,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_SOCKMAP);
+	__uint(max_entries, 20);
+	__type(key, int);
+	__type(value, int);
+} sock_map_msg SEC(".maps");
 
-struct bpf_map_def SEC("maps") sock_map_tx = {
-	.type = BPF_MAP_TYPE_SOCKMAP,
-	.key_size = sizeof(int),
-	.value_size = sizeof(int),
-	.max_entries = 20,
-};
-
-struct bpf_map_def SEC("maps") sock_map_msg = {
-	.type = BPF_MAP_TYPE_SOCKMAP,
-	.key_size = sizeof(int),
-	.value_size = sizeof(int),
-	.max_entries = 20,
-};
-
-struct bpf_map_def SEC("maps") sock_map_break = {
-	.type = BPF_MAP_TYPE_ARRAY,
-	.key_size = sizeof(int),
-	.value_size = sizeof(int),
-	.max_entries = 20,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 20);
+	__type(key, int);
+	__type(value, int);
+} sock_map_break SEC(".maps");
 
 SEC("sk_skb2")
 int bpf_prog2(struct __sk_buff *skb)
@@ -49,6 +40,9 @@ int bpf_prog2(struct __sk_buff *skb)
 	__u32 rport = skb->remote_port;
 	__u8 *d = data;
 	__u8 sk, map;
+
+	__sink(lport);
+	__sink(rport);
 
 	if (data + 8 > data_end)
 		return SK_DROP;

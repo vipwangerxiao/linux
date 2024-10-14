@@ -40,7 +40,7 @@ all as a 686A.
 
 The Via 686a southbridge has integrated hardware monitor functionality.
 It also has an I2C bus, but this driver only supports the hardware monitor.
-For the I2C bus driver, see <file:Documentation/i2c/busses/i2c-viapro>
+For the I2C bus driver, see <file:Documentation/i2c/busses/i2c-viapro.rst>
 
 The Via 686a implements three temperature sensors, two fan rotation speed
 sensors, five voltage sensors and alarms.
@@ -58,7 +58,7 @@ representable value is around 2600 RPM.
 
 Voltage sensors (also known as IN sensors) report their values in volts.
 An alarm is triggered if the voltage has crossed a programmable minimum
-or maximum limit. Voltages are internally scalled, so each voltage channel
+or maximum limit. Voltages are internally scaled, so each voltage channel
 has a different resolution and range.
 
 If an alarm triggers, it will remain triggered until the hardware register

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ALPS touchpad PS/2 mouse driver
  *
@@ -9,10 +10,6 @@
  *
  * ALPS detection, tap switching and status querying info is taken from
  * tpconfig utility (by C. Scott Ananian and Bruce Kall).
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
  */
 
 #include <linux/slab.h>
@@ -24,6 +21,7 @@
 
 #include "psmouse.h"
 #include "alps.h"
+#include "trackpoint.h"
 
 /*
  * Definitions for ALPS version 3 and 4 command mode protocol
@@ -854,8 +852,8 @@ static void alps_process_packet_v6(struct psmouse *psmouse)
 			x = y = z = 0;
 
 		/* Divide 4 since trackpoint's speed is too fast */
-		input_report_rel(dev2, REL_X, (char)x / 4);
-		input_report_rel(dev2, REL_Y, -((char)y / 4));
+		input_report_rel(dev2, REL_X, (s8)x / 4);
+		input_report_rel(dev2, REL_Y, -((s8)y / 4));
 
 		psmouse_report_standard_buttons(dev2, packet[3]);
 
@@ -988,7 +986,7 @@ static void alps_get_finger_coordinate_v7(struct input_mt_pos *mt,
 	case V7_PACKET_ID_TWO:
 		mt[1].x &= ~0x000F;
 		mt[1].y |= 0x000F;
-		/* Detect false-postive touches where x & y report max value */
+		/* Detect false-positive touches where x & y report max value */
 		if (mt[1].y == 0x7ff && mt[1].x == 0xff0) {
 			mt[1].x = 0;
 			/* y gets set to 0 at the end of this function */
@@ -1106,8 +1104,8 @@ static void alps_process_trackstick_packet_v7(struct psmouse *psmouse)
 	    ((packet[3] & 0x20) << 1);
 	z = (packet[5] & 0x3f) | ((packet[3] & 0x80) >> 1);
 
-	input_report_rel(dev2, REL_X, (char)x);
-	input_report_rel(dev2, REL_Y, -((char)y));
+	input_report_rel(dev2, REL_X, (s8)x);
+	input_report_rel(dev2, REL_Y, -((s8)y));
 	input_report_abs(dev2, ABS_PRESSURE, z);
 
 	psmouse_report_standard_buttons(dev2, packet[1]);
@@ -1398,24 +1396,16 @@ static bool alps_is_valid_package_ss4_v2(struct psmouse *psmouse)
 
 static DEFINE_MUTEX(alps_mutex);
 
-static void alps_register_bare_ps2_mouse(struct work_struct *work)
+static int alps_do_register_bare_ps2_mouse(struct alps_data *priv)
 {
-	struct alps_data *priv =
-		container_of(work, struct alps_data, dev3_register_work.work);
 	struct psmouse *psmouse = priv->psmouse;
 	struct input_dev *dev3;
-	int error = 0;
-
-	mutex_lock(&alps_mutex);
-
-	if (priv->dev3)
-		goto out;
+	int error;
 
 	dev3 = input_allocate_device();
 	if (!dev3) {
 		psmouse_err(psmouse, "failed to allocate secondary device\n");
-		error = -ENOMEM;
-		goto out;
+		return -ENOMEM;
 	}
 
 	snprintf(priv->phys3, sizeof(priv->phys3), "%s/%s",
@@ -1448,21 +1438,35 @@ static void alps_register_bare_ps2_mouse(struct work_struct *work)
 		psmouse_err(psmouse,
 			    "failed to register secondary device: %d\n",
 			    error);
-		input_free_device(dev3);
-		goto out;
+		goto err_free_input;
 	}
 
 	priv->dev3 = dev3;
+	return 0;
 
-out:
-	/*
-	 * Save the error code so that we can detect that we
-	 * already tried to create the device.
-	 */
-	if (error)
-		priv->dev3 = ERR_PTR(error);
+err_free_input:
+	input_free_device(dev3);
+	return error;
+}
 
-	mutex_unlock(&alps_mutex);
+static void alps_register_bare_ps2_mouse(struct work_struct *work)
+{
+	struct alps_data *priv = container_of(work, struct alps_data,
+					      dev3_register_work.work);
+	int error;
+
+	guard(mutex)(&alps_mutex);
+
+	if (!priv->dev3) {
+		error = alps_do_register_bare_ps2_mouse(priv);
+		if (error) {
+			/*
+			 * Save the error code so that we can detect that we
+			 * already tried to create the device.
+			 */
+			priv->dev3 = ERR_PTR(error);
+		}
+	}
 }
 
 static void alps_report_bare_ps2_packet(struct psmouse *psmouse,
@@ -1931,7 +1935,7 @@ static int alps_monitor_mode(struct psmouse *psmouse, bool enable)
 static int alps_absolute_mode_v6(struct psmouse *psmouse)
 {
 	u16 reg_val = 0x181;
-	int ret = -1;
+	int ret;
 
 	/* enter monitor mode, to write the register */
 	if (alps_monitor_mode(psmouse, true))
@@ -2296,20 +2300,20 @@ static int alps_get_v3_v7_resolution(struct psmouse *psmouse, int reg_pitch)
 	if (reg < 0)
 		return reg;
 
-	x_pitch = (char)(reg << 4) >> 4; /* sign extend lower 4 bits */
+	x_pitch = (s8)(reg << 4) >> 4; /* sign extend lower 4 bits */
 	x_pitch = 50 + 2 * x_pitch; /* In 0.1 mm units */
 
-	y_pitch = (char)reg >> 4; /* sign extend upper 4 bits */
+	y_pitch = (s8)reg >> 4; /* sign extend upper 4 bits */
 	y_pitch = 36 + 2 * y_pitch; /* In 0.1 mm units */
 
 	reg = alps_command_mode_read_reg(psmouse, reg_pitch + 1);
 	if (reg < 0)
 		return reg;
 
-	x_electrode = (char)(reg << 4) >> 4; /* sign extend lower 4 bits */
+	x_electrode = (s8)(reg << 4) >> 4; /* sign extend lower 4 bits */
 	x_electrode = 17 + x_electrode;
 
-	y_electrode = (char)reg >> 4; /* sign extend upper 4 bits */
+	y_electrode = (s8)reg >> 4; /* sign extend upper 4 bits */
 	y_electrode = 13 + y_electrode;
 
 	x_phys = x_pitch * (x_electrode - 1); /* In 0.1 mm units */
@@ -2864,6 +2868,23 @@ static const struct alps_protocol_info *alps_match_table(unsigned char *e7,
 	return NULL;
 }
 
+static bool alps_is_cs19_trackpoint(struct psmouse *psmouse)
+{
+	u8 param[2] = { 0 };
+
+	if (ps2_command(&psmouse->ps2dev,
+			param, MAKE_PS2_CMD(0, 2, TP_READ_ID)))
+		return false;
+
+	/*
+	 * param[0] contains the trackpoint device variant_id while
+	 * param[1] contains the firmware_id. So far all alps
+	 * trackpoint-only devices have their variant_ids equal
+	 * TP_VARIANT_ALPS and their firmware_ids are in 0x20~0x2f range.
+	 */
+	return param[0] == TP_VARIANT_ALPS && ((param[1] & 0xf0) == 0x20);
+}
+
 static int alps_identify(struct psmouse *psmouse, struct alps_data *priv)
 {
 	const struct alps_protocol_info *protocol;
@@ -2955,7 +2976,7 @@ static void alps_disconnect(struct psmouse *psmouse)
 	struct alps_data *priv = psmouse->private;
 
 	psmouse_reset(psmouse);
-	del_timer_sync(&priv->timer);
+	timer_shutdown_sync(&priv->timer);
 	if (priv->dev2)
 		input_unregister_device(priv->dev2);
 	if (!IS_ERR_OR_NULL(priv->dev3))
@@ -3165,6 +3186,20 @@ int alps_detect(struct psmouse *psmouse, bool set_properties)
 		return error;
 
 	/*
+	 * ALPS cs19 is a trackpoint-only device, and uses different
+	 * protocol than DualPoint ones, so we return -EINVAL here and let
+	 * trackpoint.c drive this device. If the trackpoint driver is not
+	 * enabled, the device will fall back to a bare PS/2 mouse.
+	 * If ps2_command() fails here, we depend on the immediately
+	 * followed psmouse_reset() to reset the device to normal state.
+	 */
+	if (alps_is_cs19_trackpoint(psmouse)) {
+		psmouse_dbg(psmouse,
+			    "ALPS CS19 trackpoint-only device detected, ignoring\n");
+		return -EINVAL;
+	}
+
+	/*
 	 * Reset the device to make sure it is fully operational:
 	 * on some laptops, like certain Dell Latitudes, we may
 	 * fail to properly detect presence of trackstick if device
@@ -3172,7 +3207,7 @@ int alps_detect(struct psmouse *psmouse, bool set_properties)
 	 */
 	psmouse_reset(psmouse);
 
-	priv = kzalloc(sizeof(struct alps_data), GFP_KERNEL);
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 

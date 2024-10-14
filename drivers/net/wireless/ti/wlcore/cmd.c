@@ -1,24 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * This file is part of wl1271
  *
  * Copyright (C) 2009-2010 Nokia Corporation
  *
  * Contact: Luciano Coelho <luciano.coelho@nokia.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
  */
 
 #include <linux/module.h>
@@ -192,11 +178,9 @@ int wlcore_cmd_wait_for_event_or_timeout(struct wl1271 *wl,
 
 	timeout_time = jiffies + msecs_to_jiffies(WL1271_EVENT_TIMEOUT);
 
-	ret = pm_runtime_get_sync(wl->dev);
-	if (ret < 0) {
-		pm_runtime_put_noidle(wl->dev);
+	ret = pm_runtime_resume_and_get(wl->dev);
+	if (ret < 0)
 		goto free_vector;
-	}
 
 	do {
 		if (time_after(jiffies, timeout_time)) {
@@ -349,6 +333,14 @@ int wl12xx_allocate_link(struct wl1271 *wl, struct wl12xx_vif *wlvif, u8 *hlid)
 	wl->links[link].wlvif = wlvif;
 
 	/*
+	 * Take the last sec_pn16 value from the current FW status. On recovery,
+	 * we might not have fw_status yet, and tx_lnk_sec_pn16[] will be NULL.
+	 */
+	if (wl->fw_status->counters.tx_lnk_sec_pn16)
+		wl->links[link].prev_sec_pn16 =
+			le16_to_cpu(wl->fw_status->counters.tx_lnk_sec_pn16[link]);
+
+	/*
 	 * Take saved value for total freed packets from wlvif, in case this is
 	 * recovery/resume
 	 */
@@ -376,6 +368,7 @@ void wl12xx_free_link(struct wl1271 *wl, struct wl12xx_vif *wlvif, u8 *hlid)
 
 	wl->links[*hlid].allocated_pkts = 0;
 	wl->links[*hlid].prev_freed_pkts = 0;
+	wl->links[*hlid].prev_sec_pn16 = 0;
 	wl->links[*hlid].ba_bitmap = 0;
 	eth_zero_addr(wl->links[*hlid].addr);
 
@@ -691,8 +684,8 @@ int wl12xx_cmd_role_start_ap(struct wl1271 *wl, struct wl12xx_vif *wlvif)
 		memcpy(cmd->ap.ssid, wlvif->ssid, wlvif->ssid_len);
 	} else {
 		cmd->ap.ssid_type = WL12XX_SSID_TYPE_HIDDEN;
-		cmd->ap.ssid_len = bss_conf->ssid_len;
-		memcpy(cmd->ap.ssid, bss_conf->ssid, bss_conf->ssid_len);
+		cmd->ap.ssid_len = vif->cfg.ssid_len;
+		memcpy(cmd->ap.ssid, vif->cfg.ssid, vif->cfg.ssid_len);
 	}
 
 	supported_rates = CONF_TX_ENABLED_RATES | CONF_TX_MCS_RATES |
@@ -835,11 +828,11 @@ out:
 
 
 /**
- * send test command to firmware
+ * wl1271_cmd_test - send test command to firmware
  *
  * @wl: wl struct
  * @buf: buffer containing the command, with all headers, must work with dma
- * @len: length of the buffer
+ * @buf_len: length of the buffer
  * @answer: is answer needed
  */
 int wl1271_cmd_test(struct wl1271 *wl, void *buf, size_t buf_len, u8 answer)
@@ -864,12 +857,13 @@ int wl1271_cmd_test(struct wl1271 *wl, void *buf, size_t buf_len, u8 answer)
 EXPORT_SYMBOL_GPL(wl1271_cmd_test);
 
 /**
- * read acx from firmware
+ * wl1271_cmd_interrogate - read acx from firmware
  *
  * @wl: wl struct
  * @id: acx id
  * @buf: buffer for the response, including all headers, must work with dma
- * @len: length of buf
+ * @cmd_len: length of command
+ * @res_len: length of payload
  */
 int wl1271_cmd_interrogate(struct wl1271 *wl, u16 id, void *buf,
 			   size_t cmd_len, size_t res_len)
@@ -892,7 +886,7 @@ int wl1271_cmd_interrogate(struct wl1271 *wl, u16 id, void *buf,
 }
 
 /**
- * write acx value to firmware
+ * wlcore_cmd_configure_failsafe - write acx value to firmware
  *
  * @wl: wl struct
  * @id: acx id
@@ -1080,7 +1074,7 @@ int wl12xx_cmd_build_null_data(struct wl1271 *wl, struct wl12xx_vif *wlvif)
 	} else {
 		skb = ieee80211_nullfunc_get(wl->hw,
 					     wl12xx_wlvif_to_vif(wlvif),
-					     false);
+					     -1, false);
 		if (!skb)
 			goto out;
 		size = skb->len;
@@ -1094,7 +1088,7 @@ int wl12xx_cmd_build_null_data(struct wl1271 *wl, struct wl12xx_vif *wlvif)
 out:
 	dev_kfree_skb(skb);
 	if (ret)
-		wl1271_warning("cmd buld null data failed %d", ret);
+		wl1271_warning("cmd build null data failed %d", ret);
 
 	return ret;
 
@@ -1107,7 +1101,7 @@ int wl12xx_cmd_build_klv_null_data(struct wl1271 *wl,
 	struct sk_buff *skb = NULL;
 	int ret = -ENOMEM;
 
-	skb = ieee80211_nullfunc_get(wl->hw, vif, false);
+	skb = ieee80211_nullfunc_get(wl->hw, vif,-1, false);
 	if (!skb)
 		goto out;
 
@@ -1443,7 +1437,7 @@ out:
 int wl1271_cmd_set_ap_key(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 			  u16 action, u8 id, u8 key_type,
 			  u8 key_size, const u8 *key, u8 hlid, u32 tx_seq_32,
-			  u16 tx_seq_16)
+			  u16 tx_seq_16, bool is_pairwise)
 {
 	struct wl1271_cmd_set_keys *cmd;
 	int ret = 0;
@@ -1458,8 +1452,10 @@ int wl1271_cmd_set_ap_key(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 			lid_type = WEP_DEFAULT_LID_TYPE;
 		else
 			lid_type = BROADCAST_LID_TYPE;
-	} else {
+	} else if (is_pairwise) {
 		lid_type = UNICAST_LID_TYPE;
+	} else {
+		lid_type = BROADCAST_LID_TYPE;
 	}
 
 	wl1271_debug(DEBUG_CRYPT, "ap key action: %d id: %d lid: %d type: %d"
@@ -1569,22 +1565,15 @@ int wl12xx_cmd_add_peer(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 					WL1271_PSD_LEGACY;
 
 
-	sta_rates = sta->supp_rates[wlvif->band];
-	if (sta->ht_cap.ht_supported)
+	sta_rates = sta->deflink.supp_rates[wlvif->band];
+	if (sta->deflink.ht_cap.ht_supported)
 		sta_rates |=
-			(sta->ht_cap.mcs.rx_mask[0] << HW_HT_RATES_OFFSET) |
-			(sta->ht_cap.mcs.rx_mask[1] << HW_MIMO_RATES_OFFSET);
+			(sta->deflink.ht_cap.mcs.rx_mask[0] << HW_HT_RATES_OFFSET) |
+			(sta->deflink.ht_cap.mcs.rx_mask[1] << HW_MIMO_RATES_OFFSET);
 
 	cmd->supported_rates =
 		cpu_to_le32(wl1271_tx_enabled_rates_get(wl, sta_rates,
 							wlvif->band));
-
-	if (!cmd->supported_rates) {
-		wl1271_debug(DEBUG_CMD,
-			     "peer has no supported rates yet, configuring basic rates: 0x%x",
-			     wlvif->basic_rate_set);
-		cmd->supported_rates = cpu_to_le32(wlvif->basic_rate_set);
-	}
 
 	wl1271_debug(DEBUG_CMD, "new peer rates=0x%x queues=0x%x",
 		     cmd->supported_rates, sta->uapsd_queues);

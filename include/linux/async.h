@@ -1,13 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * async.h: Asynchronous function calls for boot performance
  *
  * (C) Copyright 2009 Intel Corporation
  * Author: Arjan van de Ven <arjan@linux.intel.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; version 2
- * of the License.
  */
 #ifndef __ASYNC_H__
 #define __ASYNC_H__
@@ -94,6 +90,8 @@ async_schedule_dev(async_func_t func, struct device *dev)
 	return async_schedule_node(func, dev, dev_to_node(dev));
 }
 
+bool async_schedule_dev_nocall(async_func_t func, struct device *dev);
+
 /**
  * async_schedule_dev_domain - A device specific version of async_schedule_domain
  * @func: function to execute asynchronously
@@ -116,11 +114,11 @@ async_schedule_dev_domain(async_func_t func, struct device *dev,
 	return async_schedule_node_domain(func, dev, dev_to_node(dev), domain);
 }
 
-void async_unregister_domain(struct async_domain *domain);
 extern void async_synchronize_full(void);
 extern void async_synchronize_full_domain(struct async_domain *domain);
 extern void async_synchronize_cookie(async_cookie_t cookie);
 extern void async_synchronize_cookie_domain(async_cookie_t cookie,
 					    struct async_domain *domain);
 extern bool current_is_async(void);
+extern void async_init(void);
 #endif

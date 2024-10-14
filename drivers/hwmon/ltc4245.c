@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for Linear Technology LTC4245 I2C Multiple Supply Hot Swap Controller
  *
  * Copyright (C) 2008 Ira W. Snyder <iws@ovro.caltech.edu>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; version 2 of the License.
  *
  * This driver is based on the ds1621 and ina209 drivers.
  *
@@ -390,7 +387,7 @@ static umode_t ltc4245_is_visible(const void *_data,
 	}
 }
 
-static const struct hwmon_channel_info *ltc4245_info[] = {
+static const struct hwmon_channel_info * const ltc4245_info[] = {
 	HWMON_CHANNEL_INFO(in,
 			   HWMON_I_INPUT,
 			   HWMON_I_INPUT | HWMON_I_MIN_ALARM,
@@ -437,14 +434,13 @@ static bool ltc4245_use_extra_gpios(struct i2c_client *client)
 		return pdata->use_extra_gpios;
 
 	/* fallback on OF */
-	if (of_find_property(np, "ltc4245,use-extra-gpios", NULL))
+	if (of_property_read_bool(np, "ltc4245,use-extra-gpios"))
 		return true;
 
 	return false;
 }
 
-static int ltc4245_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int ltc4245_probe(struct i2c_client *client)
 {
 	struct i2c_adapter *adapter = client->adapter;
 	struct ltc4245_data *data;
@@ -473,7 +469,7 @@ static int ltc4245_probe(struct i2c_client *client,
 }
 
 static const struct i2c_device_id ltc4245_id[] = {
-	{ "ltc4245", 0 },
+	{ "ltc4245" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, ltc4245_id);

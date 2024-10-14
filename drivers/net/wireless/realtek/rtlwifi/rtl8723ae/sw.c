@@ -11,7 +11,6 @@
 #include "fw.h"
 #include "../rtl8723com/fw_common.h"
 #include "hw.h"
-#include "sw.h"
 #include "trx.h"
 #include "led.h"
 #include "table.h"
@@ -27,9 +26,6 @@ static void rtl8723e_init_aspm_vars(struct ieee80211_hw *hw)
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 	struct rtl_pci *rtlpci = rtl_pcidev(rtl_pcipriv(hw));
 
-	/*close ASPM for AMD defaultly */
-	rtlpci->const_amdpci_aspm = 0;
-
 	/**
 	 * ASPM PS mode.
 	 * 0 - Disable ASPM,
@@ -37,7 +33,7 @@ static void rtl8723e_init_aspm_vars(struct ieee80211_hw *hw)
 	 * 2 - Enable ASPM with Clock Req,
 	 * 3 - Alwyas Enable ASPM with Clock Req,
 	 * 4 - Always Enable ASPM without Clock Req.
-	 * set defult to RTL8192CE:3 RTL8192E:2
+	 * set default to RTL8192CE:3 RTL8192E:2
 	 */
 	rtlpci->const_pci_aspm = 3;
 
@@ -67,7 +63,7 @@ static void rtl8723e_init_aspm_vars(struct ieee80211_hw *hw)
 	rtlpci->const_support_pciaspm = rtlpriv->cfg->mod_params->aspm_support;
 }
 
-int rtl8723e_init_sw_vars(struct ieee80211_hw *hw)
+static int rtl8723e_init_sw_vars(struct ieee80211_hw *hw)
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 	struct rtl_pci *rtlpci = rtl_pcidev(rtl_pcipriv(hw));
@@ -79,9 +75,9 @@ int rtl8723e_init_sw_vars(struct ieee80211_hw *hw)
 
 	rtlpriv->btcoexist.btc_ops = rtl_btc_get_ops_pointer();
 
-	rtlpriv->dm.dm_initialgain_enable = 1;
+	rtlpriv->dm.dm_initialgain_enable = true;
 	rtlpriv->dm.dm_flag = 0;
-	rtlpriv->dm.disable_framebursting = 0;
+	rtlpriv->dm.disable_framebursting = false;
 	rtlpriv->dm.thermalvalue = 0;
 	rtlpci->transmit_config = CFENDFORM | BIT(12) | BIT(13);
 
@@ -129,10 +125,6 @@ int rtl8723e_init_sw_vars(struct ieee80211_hw *hw)
 	rtlpriv->psc.swctrl_lps = rtlpriv->cfg->mod_params->swctrl_lps;
 	rtlpriv->psc.fwctrl_lps = rtlpriv->cfg->mod_params->fwctrl_lps;
 	rtlpci->msi_support = rtlpriv->cfg->mod_params->msi_support;
-	rtlpriv->cfg->mod_params->sw_crypto =
-		rtlpriv->cfg->mod_params->sw_crypto;
-	rtlpriv->cfg->mod_params->disable_watchdog =
-		rtlpriv->cfg->mod_params->disable_watchdog;
 	if (rtlpriv->cfg->mod_params->disable_watchdog)
 		pr_info("watchdog disabled\n");
 	rtlpriv->psc.reg_fwctrl_lps = 3;
@@ -170,7 +162,7 @@ int rtl8723e_init_sw_vars(struct ieee80211_hw *hw)
 	return 0;
 }
 
-void rtl8723e_deinit_sw_vars(struct ieee80211_hw *hw)
+static void rtl8723e_deinit_sw_vars(struct ieee80211_hw *hw)
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 
@@ -181,7 +173,7 @@ void rtl8723e_deinit_sw_vars(struct ieee80211_hw *hw)
 }
 
 /* get bt coexist status */
-bool rtl8723e_get_btc_status(void)
+static bool rtl8723e_get_btc_status(void)
 {
 	return true;
 }
@@ -228,7 +220,6 @@ static struct rtl_hal_ops rtl8723e_hal_ops = {
 	.tx_polling = rtl8723e_tx_polling,
 	.enable_hw_sec = rtl8723e_enable_hw_security_config,
 	.set_key = rtl8723e_set_key,
-	.init_sw_leds = rtl8723e_init_sw_leds,
 	.get_bbreg = rtl8723_phy_query_bb_reg,
 	.set_bbreg = rtl8723_phy_set_bb_reg,
 	.get_rfreg = rtl8723e_phy_query_rf_reg,

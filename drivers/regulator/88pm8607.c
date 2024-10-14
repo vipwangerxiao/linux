@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Regulators driver for Marvell 88PM8607
  *
  * Copyright (C) 2009 Marvell International Ltd.
  *	Haojian Zhuang <haojian.zhuang@marvell.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -386,6 +383,7 @@ MODULE_DEVICE_TABLE(platform, pm8607_regulator_driver_ids);
 static struct platform_driver pm8607_regulator_driver = {
 	.driver		= {
 		.name	= "88pm860x-regulator",
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 	.probe		= pm8607_regulator_probe,
 	.id_table	= pm8607_regulator_driver_ids,

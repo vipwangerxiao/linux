@@ -1,16 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Texas Instruments TMP102 SMBus temperature sensor driver
  *
  * Copyright (C) 2010 Steven King <sfking@fdwdc.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/delay.h>
@@ -150,7 +141,7 @@ static umode_t tmp102_is_visible(const void *data, enum hwmon_sensor_types type,
 	}
 }
 
-static const struct hwmon_channel_info *tmp102_info[] = {
+static const struct hwmon_channel_info * const tmp102_info[] = {
 	HWMON_CHANNEL_INFO(chip,
 			   HWMON_C_REGISTER_TZ),
 	HWMON_CHANNEL_INFO(temp,
@@ -193,13 +184,12 @@ static const struct regmap_config tmp102_regmap_config = {
 	.writeable_reg = tmp102_is_writeable_reg,
 	.volatile_reg = tmp102_is_volatile_reg,
 	.val_format_endian = REGMAP_ENDIAN_BIG,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 	.use_single_read = true,
 	.use_single_write = true,
 };
 
-static int tmp102_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int tmp102_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
@@ -270,7 +260,6 @@ static int tmp102_probe(struct i2c_client *client,
 	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
 static int tmp102_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
@@ -293,12 +282,11 @@ static int tmp102_resume(struct device *dev)
 
 	return err;
 }
-#endif /* CONFIG_PM */
 
-static SIMPLE_DEV_PM_OPS(tmp102_dev_pm_ops, tmp102_suspend, tmp102_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(tmp102_dev_pm_ops, tmp102_suspend, tmp102_resume);
 
 static const struct i2c_device_id tmp102_id[] = {
-	{ "tmp102", 0 },
+	{ "tmp102" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, tmp102_id);
@@ -312,7 +300,7 @@ MODULE_DEVICE_TABLE(of, tmp102_of_match);
 static struct i2c_driver tmp102_driver = {
 	.driver.name	= DRIVER_NAME,
 	.driver.of_match_table = of_match_ptr(tmp102_of_match),
-	.driver.pm	= &tmp102_dev_pm_ops,
+	.driver.pm	= pm_sleep_ptr(&tmp102_dev_pm_ops),
 	.probe		= tmp102_probe,
 	.id_table	= tmp102_id,
 };

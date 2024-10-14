@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2006 PA Semi, Inc
  *
@@ -7,23 +8,11 @@
  * Maintained by: Olof Johansson <olof@lixom.net>
  *
  * Based on arch/powerpc/platforms/maple/pci.c
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 
 
 #include <linux/kernel.h>
+#include <linux/of_address.h>
 #include <linux/pci.h>
 
 #include <asm/pci-bridge.h>
@@ -281,14 +270,9 @@ static int __init pas_add_bridge(struct device_node *dev)
 
 void __init pas_pci_init(void)
 {
-	struct device_node *np, *root;
+	struct device_node *root = of_find_node_by_path("/");
+	struct device_node *np;
 	int res;
-
-	root = of_find_node_by_path("/");
-	if (!root) {
-		pr_crit("pas_pci_init: can't find root of device tree\n");
-		return;
-	}
 
 	pci_set_flags(PCI_SCAN_ALL_PCIE_DEVS);
 
@@ -297,9 +281,10 @@ void __init pas_pci_init(void)
 		res = pas_add_bridge(np);
 		of_node_put(np);
 	}
+	of_node_put(root);
 }
 
-void __iomem *pasemi_pci_getcfgaddr(struct pci_dev *dev, int offset)
+void __iomem *__init pasemi_pci_getcfgaddr(struct pci_dev *dev, int offset)
 {
 	struct pci_controller *hose;
 

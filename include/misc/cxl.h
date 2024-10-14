@@ -1,10 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright 2015 IBM Corp.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #ifndef _MISC_CXL_H
@@ -34,7 +30,7 @@ unsigned int cxl_pci_to_cfg_record(struct pci_dev *dev);
 /*
  * Context lifetime overview:
  *
- * An AFU context may be inited and then started and stoppped multiple times
+ * An AFU context may be inited and then started and stopped multiple times
  * before it's released. ie.
  *    - cxl_dev_context_init()
  *      - cxl_start_context()

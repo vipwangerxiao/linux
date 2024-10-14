@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * cxd2841er.c
  *
@@ -9,16 +10,6 @@
  * Copyright (C) 2014 NetUP Inc.
  * Copyright (C) 2014 Sergey Kozlov <serjk@netup.ru>
  * Copyright (C) 2014 Abylay Ospan <aospan@netup.ru>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
   */
 
 #include <linux/module.h>
@@ -31,7 +22,7 @@
 #include <linux/dynamic_debug.h>
 #include <linux/kernel.h>
 
-#include <media/dvb_math.h>
+#include <linux/int_log.h>
 #include <media/dvb_frontend.h>
 #include "cxd2841er.h"
 #include "cxd2841er_priv.h"
@@ -69,6 +60,7 @@ struct cxd2841er_priv {
 	enum cxd2841er_xtal		xtal;
 	enum fe_caps caps;
 	u32				flags;
+	unsigned long			stats_time;
 };
 
 static const struct cxd2841er_cnr_data s_cn_data[] = {
@@ -3288,9 +3280,15 @@ static int cxd2841er_get_frontend(struct dvb_frontend *fe,
 		p->strength.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
 
 	if (status & FE_HAS_LOCK) {
+		if (priv->stats_time &&
+		    (!time_after(jiffies, priv->stats_time)))
+			return 0;
+
+		/* Prevent retrieving stats faster than once per second */
+		priv->stats_time = jiffies + msecs_to_jiffies(1000);
+
 		cxd2841er_read_snr(fe);
 		cxd2841er_read_ucblocks(fe);
-
 		cxd2841er_read_ber(fe);
 	} else {
 		p->cnr.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
@@ -3340,7 +3338,7 @@ static int cxd2841er_set_frontend_s(struct dvb_frontend *fe)
 		cxd2841er_tuner_set(fe);
 
 	cxd2841er_tune_done(priv);
-	timeout = ((3000000 + (symbol_rate - 1)) / symbol_rate) + 150;
+	timeout = DIV_ROUND_UP(3000000, symbol_rate) + 150;
 
 	i = 0;
 	do {
@@ -3368,6 +3366,9 @@ done:
 	p->block_error.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
 	p->post_bit_error.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
 	p->post_bit_count.stat[0].scale = FE_SCALE_NOT_AVAILABLE;
+
+	/* Reset the wait for jiffies logic */
+	priv->stats_time = 0;
 
 	return ret;
 }
@@ -3929,14 +3930,14 @@ struct dvb_frontend *cxd2841er_attach_s(struct cxd2841er_config *cfg,
 {
 	return cxd2841er_attach(cfg, i2c, SYS_DVBS);
 }
-EXPORT_SYMBOL(cxd2841er_attach_s);
+EXPORT_SYMBOL_GPL(cxd2841er_attach_s);
 
 struct dvb_frontend *cxd2841er_attach_t_c(struct cxd2841er_config *cfg,
 					struct i2c_adapter *i2c)
 {
 	return cxd2841er_attach(cfg, i2c, 0);
 }
-EXPORT_SYMBOL(cxd2841er_attach_t_c);
+EXPORT_SYMBOL_GPL(cxd2841er_attach_t_c);
 
 static const struct dvb_frontend_ops cxd2841er_dvbs_s2_ops = {
 	.delsys = { SYS_DVBS, SYS_DVBS2 },

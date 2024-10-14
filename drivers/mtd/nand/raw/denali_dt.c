@@ -6,14 +6,15 @@
  */
 
 #include <linux/clk.h>
+#include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/io.h>
 #include <linux/ioport.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
+#include <linux/reset.h>
 
 #include "denali.h"
 
@@ -22,11 +23,14 @@ struct denali_dt {
 	struct clk *clk;	/* core clock */
 	struct clk *clk_x;	/* bus interface clock */
 	struct clk *clk_ecc;	/* ECC circuit clock */
+	struct reset_control *rst;	/* core reset */
+	struct reset_control *rst_reg;	/* register reset */
 };
 
 struct denali_dt_data {
 	unsigned int revision;
 	unsigned int caps;
+	unsigned int oob_skip_bytes;
 	const struct nand_ecc_caps *ecc_caps;
 };
 
@@ -34,6 +38,7 @@ NAND_ECC_CAPS_SINGLE(denali_socfpga_ecc_caps, denali_calc_ecc_bytes,
 		     512, 8, 15);
 static const struct denali_dt_data denali_socfpga_data = {
 	.caps = DENALI_CAP_HW_ECC_FIXUP,
+	.oob_skip_bytes = 2,
 	.ecc_caps = &denali_socfpga_ecc_caps,
 };
 
@@ -42,6 +47,7 @@ NAND_ECC_CAPS_SINGLE(denali_uniphier_v5a_ecc_caps, denali_calc_ecc_bytes,
 static const struct denali_dt_data denali_uniphier_v5a_data = {
 	.caps = DENALI_CAP_HW_ECC_FIXUP |
 		DENALI_CAP_DMA_64BIT,
+	.oob_skip_bytes = 8,
 	.ecc_caps = &denali_uniphier_v5a_ecc_caps,
 };
 
@@ -51,6 +57,7 @@ static const struct denali_dt_data denali_uniphier_v5b_data = {
 	.revision = 0x0501,
 	.caps = DENALI_CAP_HW_ECC_FIXUP |
 		DENALI_CAP_DMA_64BIT,
+	.oob_skip_bytes = 8,
 	.ecc_caps = &denali_uniphier_v5b_ecc_caps,
 };
 
@@ -102,51 +109,9 @@ static int denali_dt_chip_init(struct denali_controller *denali,
 	return denali_chip_init(denali, dchip);
 }
 
-/* Backward compatibility for old platforms */
-static int denali_dt_legacy_chip_init(struct denali_controller *denali)
-{
-	struct denali_chip *dchip;
-	int nsels, i;
-
-	nsels = denali->nbanks;
-
-	dchip = devm_kzalloc(denali->dev, struct_size(dchip, sels, nsels),
-			     GFP_KERNEL);
-	if (!dchip)
-		return -ENOMEM;
-
-	dchip->nsels = nsels;
-
-	for (i = 0; i < nsels; i++)
-		dchip->sels[i].bank = i;
-
-	nand_set_flash_node(&dchip->chip, denali->dev->of_node);
-
-	return denali_chip_init(denali, dchip);
-}
-
-/*
- * Check the DT binding.
- * The new binding expects chip subnodes in the controller node.
- * So, #address-cells = <1>; #size-cells = <0>; are required.
- * Check the #size-cells to distinguish the binding.
- */
-static bool denali_dt_is_legacy_binding(struct device_node *np)
-{
-	u32 cells;
-	int ret;
-
-	ret = of_property_read_u32(np, "#size-cells", &cells);
-	if (ret)
-		return true;
-
-	return cells != 0;
-}
-
 static int denali_dt_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct resource *res;
 	struct denali_dt *dt;
 	const struct denali_dt_data *data;
 	struct denali_controller *denali;
@@ -159,71 +124,79 @@ static int denali_dt_probe(struct platform_device *pdev)
 	denali = &dt->controller;
 
 	data = of_device_get_match_data(dev);
-	if (data) {
-		denali->revision = data->revision;
-		denali->caps = data->caps;
-		denali->ecc_caps = data->ecc_caps;
-	}
+	if (WARN_ON(!data))
+		return -EINVAL;
+
+	denali->revision = data->revision;
+	denali->caps = data->caps;
+	denali->oob_skip_bytes = data->oob_skip_bytes;
+	denali->ecc_caps = data->ecc_caps;
 
 	denali->dev = dev;
 	denali->irq = platform_get_irq(pdev, 0);
-	if (denali->irq < 0) {
-		dev_err(dev, "no irq defined\n");
+	if (denali->irq < 0)
 		return denali->irq;
-	}
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "denali_reg");
-	denali->reg = devm_ioremap_resource(dev, res);
+	denali->reg = devm_platform_ioremap_resource_byname(pdev, "denali_reg");
 	if (IS_ERR(denali->reg))
 		return PTR_ERR(denali->reg);
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "nand_data");
-	denali->host = devm_ioremap_resource(dev, res);
+	denali->host = devm_platform_ioremap_resource_byname(pdev, "nand_data");
 	if (IS_ERR(denali->host))
 		return PTR_ERR(denali->host);
 
-	dt->clk = devm_clk_get(dev, "nand");
+	dt->clk = devm_clk_get_enabled(dev, "nand");
 	if (IS_ERR(dt->clk))
 		return PTR_ERR(dt->clk);
 
-	dt->clk_x = devm_clk_get(dev, "nand_x");
+	dt->clk_x = devm_clk_get_enabled(dev, "nand_x");
 	if (IS_ERR(dt->clk_x))
 		return PTR_ERR(dt->clk_x);
 
-	dt->clk_ecc = devm_clk_get(dev, "ecc");
+	dt->clk_ecc = devm_clk_get_enabled(dev, "ecc");
 	if (IS_ERR(dt->clk_ecc))
 		return PTR_ERR(dt->clk_ecc);
 
-	ret = clk_prepare_enable(dt->clk);
-	if (ret)
-		return ret;
+	dt->rst = devm_reset_control_get_optional_shared(dev, "nand");
+	if (IS_ERR(dt->rst))
+		return PTR_ERR(dt->rst);
 
-	ret = clk_prepare_enable(dt->clk_x);
-	if (ret)
-		goto out_disable_clk;
-
-	ret = clk_prepare_enable(dt->clk_ecc);
-	if (ret)
-		goto out_disable_clk_x;
+	dt->rst_reg = devm_reset_control_get_optional_shared(dev, "reg");
+	if (IS_ERR(dt->rst_reg))
+		return PTR_ERR(dt->rst_reg);
 
 	denali->clk_rate = clk_get_rate(dt->clk);
 	denali->clk_x_rate = clk_get_rate(dt->clk_x);
 
+	/*
+	 * Deassert the register reset, and the core reset in this order.
+	 * Deasserting the core reset while the register reset is asserted
+	 * will cause unpredictable behavior in the controller.
+	 */
+	ret = reset_control_deassert(dt->rst_reg);
+	if (ret)
+		return ret;
+
+	ret = reset_control_deassert(dt->rst);
+	if (ret)
+		goto out_assert_rst_reg;
+
+	/*
+	 * When the reset is deasserted, the initialization sequence is kicked
+	 * (bootstrap process). The driver must wait until it finished.
+	 * Otherwise, it will result in unpredictable behavior.
+	 */
+	usleep_range(200, 1000);
+
 	ret = denali_init(denali);
 	if (ret)
-		goto out_disable_clk_ecc;
+		goto out_assert_rst;
 
-	if (denali_dt_is_legacy_binding(dev->of_node)) {
-		ret = denali_dt_legacy_chip_init(denali);
-		if (ret)
+	for_each_child_of_node(dev->of_node, np) {
+		ret = denali_dt_chip_init(denali, np);
+		if (ret) {
+			of_node_put(np);
 			goto out_remove_denali;
-	} else {
-		for_each_child_of_node(dev->of_node, np) {
-			ret = denali_dt_chip_init(denali, np);
-			if (ret) {
-				of_node_put(np);
-				goto out_remove_denali;
-			}
 		}
 	}
 
@@ -233,31 +206,26 @@ static int denali_dt_probe(struct platform_device *pdev)
 
 out_remove_denali:
 	denali_remove(denali);
-out_disable_clk_ecc:
-	clk_disable_unprepare(dt->clk_ecc);
-out_disable_clk_x:
-	clk_disable_unprepare(dt->clk_x);
-out_disable_clk:
-	clk_disable_unprepare(dt->clk);
+out_assert_rst:
+	reset_control_assert(dt->rst);
+out_assert_rst_reg:
+	reset_control_assert(dt->rst_reg);
 
 	return ret;
 }
 
-static int denali_dt_remove(struct platform_device *pdev)
+static void denali_dt_remove(struct platform_device *pdev)
 {
 	struct denali_dt *dt = platform_get_drvdata(pdev);
 
 	denali_remove(&dt->controller);
-	clk_disable_unprepare(dt->clk_ecc);
-	clk_disable_unprepare(dt->clk_x);
-	clk_disable_unprepare(dt->clk);
-
-	return 0;
+	reset_control_assert(dt->rst);
+	reset_control_assert(dt->rst_reg);
 }
 
 static struct platform_driver denali_dt_driver = {
 	.probe		= denali_dt_probe,
-	.remove		= denali_dt_remove,
+	.remove_new	= denali_dt_remove,
 	.driver		= {
 		.name	= "denali-nand-dt",
 		.of_match_table	= denali_nand_dt_ids,

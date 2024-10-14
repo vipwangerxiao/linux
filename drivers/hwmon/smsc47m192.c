@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * smsc47m192.c - Support for hardware monitoring block of
  *		  SMSC LPC47M192 and compatible Super I/O chips
@@ -5,20 +6,6 @@
  * Copyright (C) 2006  Hartmut Rick <linux@rick.claranet.de>
  *
  * Derived from lm78.c and other chip drivers.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/module.h>
@@ -99,7 +86,7 @@ struct smsc47m192_data {
 	struct i2c_client *client;
 	const struct attribute_group *groups[3];
 	struct mutex update_lock;
-	char valid;		/* !=0 if following fields are valid */
+	bool valid;		/* true if following fields are valid */
 	unsigned long last_updated;	/* In jiffies */
 
 	u8 in[8];		/* Register value */
@@ -170,7 +157,7 @@ static struct smsc47m192_data *smsc47m192_update_device(struct device *dev)
 						SMSC47M192_REG_ALARM2) << 8);
 
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 	}
 
 	mutex_unlock(&data->update_lock);
@@ -595,13 +582,12 @@ static int smsc47m192_detect(struct i2c_client *client,
 		return -ENODEV;
 	}
 
-	strlcpy(info->type, "smsc47m192", I2C_NAME_SIZE);
+	strscpy(info->type, "smsc47m192", I2C_NAME_SIZE);
 
 	return 0;
 }
 
-static int smsc47m192_probe(struct i2c_client *client,
-			    const struct i2c_device_id *id)
+static int smsc47m192_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
@@ -632,7 +618,7 @@ static int smsc47m192_probe(struct i2c_client *client,
 }
 
 static const struct i2c_device_id smsc47m192_id[] = {
-	{ "smsc47m192", 0 },
+	{ "smsc47m192" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, smsc47m192_id);

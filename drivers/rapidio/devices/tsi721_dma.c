@@ -1,21 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * DMA Engine support for Tsi721 PCIExpress-to-SRIO bridge
  *
  * Copyright (c) 2011-2014 Integrated Device Technology, Inc.
  * Alexandre Bounine <alexandre.bounine@idt.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the Free
- * Software Foundation; either version 2 of the License, or (at your option)
- * any later version.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * The full GNU General Public License is included in this distribution in the
- * file called COPYING.
  */
 
 #include <linux/io.h>
@@ -295,11 +283,13 @@ void tsi721_bdma_handler(struct tsi721_bdma_chan *bdma_chan)
 
 #ifdef CONFIG_PCI_MSI
 /**
- * tsi721_omsg_msix - MSI-X interrupt handler for BDMA channels
+ * tsi721_bdma_msix - MSI-X interrupt handler for BDMA channels
  * @irq: Linux interrupt number
  * @ptr: Pointer to interrupt-specific data (BDMA channel structure)
  *
  * Handles BDMA channel interrupts signaled using MSI-X.
+ *
+ * Returns: %IRQ_HANDLED
  */
 static irqreturn_t tsi721_bdma_msix(int irq, void *ptr)
 {

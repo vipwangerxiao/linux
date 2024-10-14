@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * arch/powerpc/sysdev/dart_iommu.c
  *
@@ -10,21 +11,6 @@
  * Copyright (C) 2004 Olof Johansson <olof@lixom.net>, IBM Corporation
  *
  * Dynamic DMA mapping support, Apple U3, U4 & IBM CPC925 "DART" iommu.
- *
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 
 #include <linux/init.h>
@@ -38,9 +24,8 @@
 #include <linux/suspend.h>
 #include <linux/memblock.h>
 #include <linux/gfp.h>
-#include <linux/kmemleak.h>
+#include <linux/of_address.h>
 #include <asm/io.h>
-#include <asm/prom.h>
 #include <asm/iommu.h>
 #include <asm/pci-bridge.h>
 #include <asm/machdep.h>
@@ -158,7 +143,7 @@ static void dart_cache_sync(unsigned int *base, unsigned int count)
 	unsigned int tmp;
 
 	/* Perform a standard cache flush */
-	flush_inval_dcache_range(start, end);
+	flush_dcache_range(start, end);
 
 	/*
 	 * Perform the sequence described in the CPC925 manual to
@@ -240,7 +225,7 @@ static void dart_free(struct iommu_table *tbl, long index, long npages)
 	dart_cache_sync(orig_dp, orig_npages);
 }
 
-static void allocate_dart(void)
+static void __init allocate_dart(void)
 {
 	unsigned long tmp;
 
@@ -256,9 +241,6 @@ static void allocate_dart(void)
 					NUMA_NO_NODE);
 	if (!dart_tablebase)
 		panic("Failed to allocate 16MB below 2GB for DART table\n");
-
-	/* There is no point scanning the DART space for leaks*/
-	kmemleak_no_scan((void *)dart_tablebase);
 
 	/* Allocate a spare page to map all invalid DART pages. We need to do
 	 * that to work around what looks like a problem with the HT bridge
@@ -358,7 +340,8 @@ static void iommu_table_dart_setup(void)
 	iommu_table_dart.it_index = 0;
 	iommu_table_dart.it_blocksize = 1;
 	iommu_table_dart.it_ops = &iommu_dart_ops;
-	iommu_init_table(&iommu_table_dart, -1);
+	if (!iommu_init_table(&iommu_table_dart, -1, 0, 0))
+		panic("Failed to initialize iommu table");
 
 	/* Reserve the last page of the DART to avoid possible prefetch
 	 * past the DART mapped area
@@ -417,9 +400,10 @@ void __init iommu_init_early_dart(struct pci_controller_ops *controller_ops)
 	}
 
 	/* Initialize the DART HW */
-	if (dart_init(dn) != 0)
+	if (dart_init(dn) != 0) {
+		of_node_put(dn);
 		return;
-
+	}
 	/*
 	 * U4 supports a DART bypass, we use it for 64-bit capable devices to
 	 * improve performance.  However, that only works for devices connected
@@ -432,6 +416,7 @@ void __init iommu_init_early_dart(struct pci_controller_ops *controller_ops)
 
 	/* Setup pci_dma ops */
 	set_pci_dma_ops(&dma_iommu_ops);
+	of_node_put(dn);
 }
 
 #ifdef CONFIG_PM

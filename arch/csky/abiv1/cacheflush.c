@@ -4,49 +4,72 @@
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/fs.h>
+#include <linux/pagemap.h>
 #include <linux/syscalls.h>
 #include <linux/spinlock.h>
 #include <asm/page.h>
 #include <asm/cache.h>
 #include <asm/cacheflush.h>
 #include <asm/cachectl.h>
+#include <asm/tlbflush.h>
+
+#define PG_dcache_clean		PG_arch_1
+
+void flush_dcache_folio(struct folio *folio)
+{
+	struct address_space *mapping;
+
+	if (is_zero_pfn(folio_pfn(folio)))
+		return;
+
+	mapping = folio_flush_mapping(folio);
+
+	if (mapping && !folio_mapped(folio))
+		clear_bit(PG_dcache_clean, &folio->flags);
+	else {
+		dcache_wbinv_all();
+		if (mapping)
+			icache_inv_all();
+		set_bit(PG_dcache_clean, &folio->flags);
+	}
+}
+EXPORT_SYMBOL(flush_dcache_folio);
 
 void flush_dcache_page(struct page *page)
 {
-	struct address_space *mapping = page_mapping(page);
-	unsigned long addr;
+	flush_dcache_folio(page_folio(page));
+}
+EXPORT_SYMBOL(flush_dcache_page);
 
-	if (mapping && !mapping_mapped(mapping)) {
-		set_bit(PG_arch_1, &(page)->flags);
+void update_mmu_cache_range(struct vm_fault *vmf, struct vm_area_struct *vma,
+		unsigned long addr, pte_t *ptep, unsigned int nr)
+{
+	unsigned long pfn = pte_pfn(*ptep);
+	struct folio *folio;
+
+	flush_tlb_page(vma, addr);
+
+	if (!pfn_valid(pfn))
 		return;
-	}
 
-	/*
-	 * We could delay the flush for the !page_mapping case too.  But that
-	 * case is for exec env/arg pages and those are %99 certainly going to
-	 * get faulted into the tlb (and thus flushed) anyways.
-	 */
-	addr = (unsigned long) page_address(page);
-	dcache_wb_range(addr, addr + PAGE_SIZE);
+	if (is_zero_pfn(pfn))
+		return;
+
+	folio = page_folio(pfn_to_page(pfn));
+	if (!test_and_set_bit(PG_dcache_clean, &folio->flags))
+		dcache_wbinv_all();
+
+	if (folio_flush_mapping(folio)) {
+		if (vma->vm_flags & VM_EXEC)
+			icache_inv_all();
+	}
 }
 
-void update_mmu_cache(struct vm_area_struct *vma, unsigned long address,
-		      pte_t *pte)
+void flush_cache_range(struct vm_area_struct *vma, unsigned long start,
+	unsigned long end)
 {
-	unsigned long addr;
-	struct page *page;
-	unsigned long pfn;
+	dcache_wbinv_all();
 
-	pfn = pte_pfn(*pte);
-	if (unlikely(!pfn_valid(pfn)))
-		return;
-
-	page = pfn_to_page(pfn);
-	addr = (unsigned long) page_address(page);
-
-	if (vma->vm_flags & VM_EXEC ||
-	    pages_do_alias(addr, address & PAGE_MASK))
-		cache_wbinv_all();
-
-	clear_bit(PG_arch_1, &(page)->flags);
+	if (vma->vm_flags & VM_EXEC)
+		icache_inv_all();
 }

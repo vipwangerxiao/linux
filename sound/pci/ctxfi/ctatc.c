@@ -1,9 +1,6 @@
-/**
+// SPDX-License-Identifier: GPL-2.0-only
+/*
  * Copyright (C) 2008, Creative Technology Ltd. All Rights Reserved.
- *
- * This source file is released under GPL v2 license (no other versions).
- * See the COPYING file included in the main directory of this source
- * distribution for the license terms and conditions.
  *
  * @File    ctatc.c
  *
@@ -38,7 +35,8 @@
 			    | (0x10 << 16) \
 			    | ((IEC958_AES3_CON_FS_48000) << 24))
 
-static struct snd_pci_quirk subsys_20k1_list[] = {
+static const struct snd_pci_quirk subsys_20k1_list[] = {
+	SND_PCI_QUIRK(PCI_VENDOR_ID_CREATIVE, 0x0021, "SB046x", CTSB046X),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_CREATIVE, 0x0022, "SB055x", CTSB055X),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_CREATIVE, 0x002f, "SB055x", CTSB055X),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_CREATIVE, 0x0029, "SB073x", CTSB073X),
@@ -48,7 +46,7 @@ static struct snd_pci_quirk subsys_20k1_list[] = {
 	{ } /* terminator */
 };
 
-static struct snd_pci_quirk subsys_20k2_list[] = {
+static const struct snd_pci_quirk subsys_20k2_list[] = {
 	SND_PCI_QUIRK(PCI_VENDOR_ID_CREATIVE, PCI_SUBDEVICE_ID_CREATIVE_SB0760,
 		      "SB0760", CTSB0760),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_CREATIVE, PCI_SUBDEVICE_ID_CREATIVE_SB1270,
@@ -67,6 +65,7 @@ static struct snd_pci_quirk subsys_20k2_list[] = {
 
 static const char *ct_subsys_name[NUM_CTCARDS] = {
 	/* 20k1 models */
+	[CTSB046X]	= "SB046x",
 	[CTSB055X]	= "SB055x",
 	[CTSB073X]	= "SB073x",
 	[CTUAA]		= "UAA",
@@ -106,23 +105,20 @@ static struct {
 			    .public_name = "Mixer"}
 };
 
-typedef int (*create_t)(struct hw *, void **);
-typedef int (*destroy_t)(void *);
-
 static struct {
 	int (*create)(struct hw *hw, void **rmgr);
 	int (*destroy)(void *mgr);
 } rsc_mgr_funcs[NUM_RSCTYP] = {
-	[SRC] 		= { .create 	= (create_t)src_mgr_create,
-			    .destroy 	= (destroy_t)src_mgr_destroy	},
-	[SRCIMP] 	= { .create 	= (create_t)srcimp_mgr_create,
-			    .destroy 	= (destroy_t)srcimp_mgr_destroy	},
-	[AMIXER]	= { .create	= (create_t)amixer_mgr_create,
-			    .destroy	= (destroy_t)amixer_mgr_destroy	},
-	[SUM]		= { .create	= (create_t)sum_mgr_create,
-			    .destroy	= (destroy_t)sum_mgr_destroy	},
-	[DAIO]		= { .create	= (create_t)daio_mgr_create,
-			    .destroy	= (destroy_t)daio_mgr_destroy	}
+	[SRC] 		= { .create 	= src_mgr_create,
+			    .destroy 	= src_mgr_destroy	},
+	[SRCIMP] 	= { .create 	= srcimp_mgr_create,
+			    .destroy 	= srcimp_mgr_destroy	},
+	[AMIXER]	= { .create	= amixer_mgr_create,
+			    .destroy	= amixer_mgr_destroy	},
+	[SUM]		= { .create	= sum_mgr_create,
+			    .destroy	= sum_mgr_destroy	},
+	[DAIO]		= { .create	= daio_mgr_create,
+			    .destroy	= daio_mgr_destroy	}
 };
 
 static int
@@ -1285,7 +1281,7 @@ static int atc_identify_card(struct ct_atc *atc, unsigned int ssid)
 	if (p) {
 		if (p->value < 0) {
 			dev_err(atc->card->dev,
-				"Device %04x:%04x is black-listed\n",
+				"Device %04x:%04x is on the denylist\n",
 				vendor_id, device_id);
 			return -ENOENT;
 		}
@@ -1658,6 +1654,10 @@ static const struct ct_atc atc_preset = {
  *  ct_atc_create - create and initialize a hardware manager
  *  @card: corresponding alsa card object
  *  @pci: corresponding kernel pci device object
+ *  @rsr: reference sampling rate
+ *  @msr: master sampling rate
+ *  @chip_type: CHIPTYP enum values
+ *  @ssid: vendor ID (upper 16 bits) and device ID (lower 16 bits)
  *  @ratc: return created object address in it
  *
  *  Creates and initializes a hardware manager.
@@ -1672,7 +1672,7 @@ int ct_atc_create(struct snd_card *card, struct pci_dev *pci,
 		  struct ct_atc **ratc)
 {
 	struct ct_atc *atc;
-	static struct snd_device_ops ops = {
+	static const struct snd_device_ops ops = {
 		.dev_free = atc_dev_free,
 	};
 	int err;

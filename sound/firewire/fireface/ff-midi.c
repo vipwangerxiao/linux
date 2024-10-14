@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ff-midi.c - a part of driver for RME Fireface series
  *
  * Copyright (c) 2015-2017 Takashi Sakamoto
- *
- * Licensed under the terms of the GNU General Public License, version 2.
  */
 
 #include "ff.h"
@@ -80,8 +79,8 @@ static void set_midi_substream_names(struct snd_rawmidi_str *stream,
 	struct snd_rawmidi_substream *substream;
 
 	list_for_each_entry(substream, &stream->substreams, list) {
-		snprintf(substream->name, sizeof(substream->name),
-			 "%s MIDI %d", name, substream->number + 1);
+		scnprintf(substream->name, sizeof(substream->name),
+			  "%s MIDI %d", name, substream->number + 1);
 	}
 }
 

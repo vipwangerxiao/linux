@@ -1,18 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Bluetooth HCI UART H4 driver with Nokia Extensions AKA Nokia H4+
  *
  *  Copyright (C) 2015 Marcel Holtmann <marcel@holtmann.org>
  *  Copyright (C) 2015-2017 Sebastian Reichel <sre@kernel.org>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
  */
 
 #include <linux/clk.h>
@@ -29,7 +20,7 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/types.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
 
@@ -124,11 +115,6 @@ struct hci_nokia_neg_evt {
 #define MAX_BAUD_RATE		3692300
 #define SETUP_BAUD_RATE		921600
 #define INIT_BAUD_RATE		120000
-
-struct hci_nokia_radio_hdr {
-	u8	evt;
-	u8	dlen;
-} __packed;
 
 struct nokia_bt_dev {
 	struct hci_uart hu;
@@ -529,7 +515,7 @@ static int nokia_enqueue(struct hci_uart *hu, struct sk_buff *skb)
 		err = skb_pad(skb, 1);
 		if (err)
 			return err;
-		skb_put_u8(skb, 0x00);
+		skb_put(skb, 1);
 	}
 
 	skb_queue_tail(&btdev->txq, skb);
@@ -743,7 +729,11 @@ static int nokia_bluetooth_serdev_probe(struct serdev_device *serdev)
 		return err;
 	}
 
-	clk_prepare_enable(sysclk);
+	err = clk_prepare_enable(sysclk);
+	if (err) {
+		dev_err(dev, "could not enable sysclk: %d", err);
+		return err;
+	}
 	btdev->sysclk_speed = clk_get_rate(sysclk);
 	clk_disable_unprepare(sysclk);
 

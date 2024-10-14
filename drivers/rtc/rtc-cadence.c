@@ -255,7 +255,6 @@ static const struct rtc_class_ops cdns_rtc_ops = {
 static int cdns_rtc_probe(struct platform_device *pdev)
 {
 	struct cdns_rtc *crtc;
-	struct resource *res;
 	int ret;
 	unsigned long ref_clk_freq;
 
@@ -263,8 +262,7 @@ static int cdns_rtc_probe(struct platform_device *pdev)
 	if (!crtc)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	crtc->regs = devm_ioremap_resource(&pdev->dev, res);
+	crtc->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(crtc->regs))
 		return PTR_ERR(crtc->regs);
 
@@ -289,12 +287,8 @@ static int cdns_rtc_probe(struct platform_device *pdev)
 	}
 
 	crtc->rtc_dev = devm_rtc_allocate_device(&pdev->dev);
-	if (IS_ERR(crtc->rtc_dev)) {
-		ret = PTR_ERR(crtc->rtc_dev);
-		dev_err(&pdev->dev,
-			"Failed to allocate the RTC device, %d\n", ret);
-		return ret;
-	}
+	if (IS_ERR(crtc->rtc_dev))
+		return PTR_ERR(crtc->rtc_dev);
 
 	platform_set_drvdata(pdev, crtc);
 
@@ -342,12 +336,9 @@ static int cdns_rtc_probe(struct platform_device *pdev)
 	writel(0, crtc->regs + CDNS_RTC_HMR);
 	writel(CDNS_RTC_KRTCR_KRTC, crtc->regs + CDNS_RTC_KRTCR);
 
-	ret = rtc_register_device(crtc->rtc_dev);
-	if (ret) {
-		dev_err(&pdev->dev,
-			"Failed to register the RTC device, %d\n", ret);
+	ret = devm_rtc_register_device(crtc->rtc_dev);
+	if (ret)
 		goto err_disable_wakeup;
-	}
 
 	return 0;
 
@@ -363,7 +354,7 @@ err_disable_pclk:
 	return ret;
 }
 
-static int cdns_rtc_remove(struct platform_device *pdev)
+static void cdns_rtc_remove(struct platform_device *pdev)
 {
 	struct cdns_rtc *crtc = platform_get_drvdata(pdev);
 
@@ -372,8 +363,6 @@ static int cdns_rtc_remove(struct platform_device *pdev)
 
 	clk_disable_unprepare(crtc->pclk);
 	clk_disable_unprepare(crtc->ref_clk);
-
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -413,7 +402,7 @@ static struct platform_driver cdns_rtc_driver = {
 		.pm = &cdns_rtc_pm_ops,
 	},
 	.probe = cdns_rtc_probe,
-	.remove = cdns_rtc_remove,
+	.remove_new = cdns_rtc_remove,
 };
 module_platform_driver(cdns_rtc_driver);
 

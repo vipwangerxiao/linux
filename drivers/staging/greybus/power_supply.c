@@ -10,8 +10,7 @@
 #include <linux/module.h>
 #include <linux/power_supply.h>
 #include <linux/slab.h>
-
-#include "greybus.h"
+#include <linux/greybus.h>
 
 #define PROP_MAX 32
 
@@ -450,7 +449,7 @@ static int __gb_power_supply_set_name(char *init_name, char *name, size_t len)
 
 	if (!strlen(init_name))
 		init_name = "gb_power_supply";
-	strlcpy(name, init_name, len);
+	strscpy(name, init_name, len);
 
 	while ((ret < len) && (psy = power_supply_get_by_name(name))) {
 		power_supply_put(psy);
@@ -1137,4 +1136,5 @@ static struct greybus_driver gb_power_supply_driver = {
 };
 module_greybus_driver(gb_power_supply_driver);
 
+MODULE_DESCRIPTION("Power Supply driver for a Greybus module");
 MODULE_LICENSE("GPL v2");

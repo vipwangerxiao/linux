@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB
 
-/**
+/*
  * ibumad BPF sample kernel side
  *
  * This program is free software; you can redistribute it and/or
@@ -13,40 +13,34 @@
 #define KBUILD_MODNAME "ibumad_count_pkts_by_class"
 #include <uapi/linux/bpf.h>
 
-#include "bpf_helpers.h"
+#include <bpf/bpf_helpers.h>
 
 
-struct bpf_map_def SEC("maps") read_count = {
-	.type        = BPF_MAP_TYPE_ARRAY,
-	.key_size    = sizeof(u32), /* class; u32 required */
-	.value_size  = sizeof(u64), /* count of mads read */
-	.max_entries = 256, /* Room for all Classes */
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__type(key, u32); /* class; u32 required */
+	__type(value, u64); /* count of mads read */
+	__uint(max_entries, 256); /* Room for all Classes */
+} read_count SEC(".maps");
 
-struct bpf_map_def SEC("maps") write_count = {
-	.type        = BPF_MAP_TYPE_ARRAY,
-	.key_size    = sizeof(u32), /* class; u32 required */
-	.value_size  = sizeof(u64), /* count of mads written */
-	.max_entries = 256, /* Room for all Classes */
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__type(key, u32); /* class; u32 required */
+	__type(value, u64); /* count of mads written */
+	__uint(max_entries, 256); /* Room for all Classes */
+} write_count SEC(".maps");
 
 #undef DEBUG
-#ifdef DEBUG
-#define bpf_debug(fmt, ...)                         \
-({                                                  \
-	char ____fmt[] = fmt;                       \
-	bpf_trace_printk(____fmt, sizeof(____fmt),  \
-			 ##__VA_ARGS__);            \
-})
-#else
-#define bpf_debug(fmt, ...)
+#ifndef DEBUG
+#undef bpf_printk
+#define bpf_printk(fmt, ...)
 #endif
 
 /* Taken from the current format defined in
  * include/trace/events/ib_umad.h
  * and
- * /sys/kernel/debug/tracing/events/ib_umad/ib_umad_read/format
- * /sys/kernel/debug/tracing/events/ib_umad/ib_umad_write/format
+ * /sys/kernel/tracing/events/ib_umad/ib_umad_read/format
+ * /sys/kernel/tracing/events/ib_umad/ib_umad_write/format
  */
 struct ib_umad_rw_args {
 	u64 pad;
@@ -86,7 +80,7 @@ int on_ib_umad_read_recv(struct ib_umad_rw_args *ctx)
 	u64 zero = 0, *val;
 	u8 class = ctx->mgmt_class;
 
-	bpf_debug("ib_umad read recv : class 0x%x\n", class);
+	bpf_printk("ib_umad read recv : class 0x%x\n", class);
 
 	val = bpf_map_lookup_elem(&read_count, &class);
 	if (!val) {
@@ -106,7 +100,7 @@ int on_ib_umad_read_send(struct ib_umad_rw_args *ctx)
 	u64 zero = 0, *val;
 	u8 class = ctx->mgmt_class;
 
-	bpf_debug("ib_umad read send : class 0x%x\n", class);
+	bpf_printk("ib_umad read send : class 0x%x\n", class);
 
 	val = bpf_map_lookup_elem(&read_count, &class);
 	if (!val) {
@@ -126,7 +120,7 @@ int on_ib_umad_write(struct ib_umad_rw_args *ctx)
 	u64 zero = 0, *val;
 	u8 class = ctx->mgmt_class;
 
-	bpf_debug("ib_umad write : class 0x%x\n", class);
+	bpf_printk("ib_umad write : class 0x%x\n", class);
 
 	val = bpf_map_lookup_elem(&write_count, &class);
 	if (!val) {

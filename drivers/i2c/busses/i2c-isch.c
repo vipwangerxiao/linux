@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
     i2c-isch.c - Linux kernel driver for Intel SCH chipset SMBus
     - Based on i2c-piix4.c
@@ -6,14 +7,6 @@
     - Intel SCH support
     Copyright (c) 2007 - 2008 Jacob Jun Pan <jacob.jun.pan@intel.com>
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License version 2 as
-    published by the Free Software Foundation.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
 */
 
 /*
@@ -106,12 +99,11 @@ static int sch_transaction(void)
 	if (retries > MAX_RETRIES) {
 		dev_err(&sch_adapter.dev, "SMBus Timeout!\n");
 		result = -ETIMEDOUT;
-	}
-	if (temp & 0x04) {
+	} else if (temp & 0x04) {
 		result = -EIO;
 		dev_dbg(&sch_adapter.dev, "Bus collision! SMBus may be "
 			"locked until next hard reset. (sorry!)\n");
-		/* Clock stops and slave is stuck in mid-transmission */
+		/* Clock stops and target is stuck in mid-transmission */
 	} else if (temp & 0x02) {
 		result = -EIO;
 		dev_err(&sch_adapter.dev, "Error: no response!\n");
@@ -256,7 +248,7 @@ static const struct i2c_algorithm smbus_algorithm = {
 
 static struct i2c_adapter sch_adapter = {
 	.owner		= THIS_MODULE,
-	.class		= I2C_CLASS_HWMON | I2C_CLASS_SPD,
+	.class		= I2C_CLASS_HWMON,
 	.algo		= &smbus_algorithm,
 };
 
@@ -293,14 +285,12 @@ static int smbus_sch_probe(struct platform_device *dev)
 	return retval;
 }
 
-static int smbus_sch_remove(struct platform_device *pdev)
+static void smbus_sch_remove(struct platform_device *pdev)
 {
 	if (sch_smba) {
 		i2c_del_adapter(&sch_adapter);
 		sch_smba = 0;
 	}
-
-	return 0;
 }
 
 static struct platform_driver smbus_sch_driver = {
@@ -308,7 +298,7 @@ static struct platform_driver smbus_sch_driver = {
 		.name = "isch_smbus",
 	},
 	.probe		= smbus_sch_probe,
-	.remove		= smbus_sch_remove,
+	.remove_new	= smbus_sch_remove,
 };
 
 module_platform_driver(smbus_sch_driver);

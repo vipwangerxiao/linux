@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * wm8350-i2c.c  --  Generic I2C driver for Wolfson WM8350 PMIC
  *
@@ -5,12 +6,6 @@
  *
  * Author: Liam Girdwood
  *         linux@wolfsonmicro.com
- *
- *  This program is free software; you can redistribute  it and/or modify it
- *  under  the terms of  the GNU General  Public License as published by the
- *  Free Software Foundation;  either version 2 of the  License, or (at your
- *  option) any later version.
- *
  */
 
 #include <linux/err.h>
@@ -21,8 +16,7 @@
 #include <linux/regmap.h>
 #include <linux/slab.h>
 
-static int wm8350_i2c_probe(struct i2c_client *i2c,
-			    const struct i2c_device_id *id)
+static int wm8350_i2c_probe(struct i2c_client *i2c)
 {
 	struct wm8350 *wm8350;
 	struct wm8350_platform_data *pdata = dev_get_platdata(&i2c->dev);
@@ -47,9 +41,9 @@ static int wm8350_i2c_probe(struct i2c_client *i2c,
 }
 
 static const struct i2c_device_id wm8350_i2c_id[] = {
-	{ "wm8350", 0 },
-	{ "wm8351", 0 },
-	{ "wm8352", 0 },
+	{ "wm8350" },
+	{ "wm8351" },
+	{ "wm8352" },
 	{ }
 };
 

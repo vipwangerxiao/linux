@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Copyright (c) 2005 Samsung Electronics
  *  Kyungmin Park <kyungmin.park@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  *  Overview:
  *   This is a device driver for the OneNAND flash for generic boards.
@@ -56,7 +53,12 @@ static int generic_onenand_probe(struct platform_device *pdev)
 	}
 
 	info->onenand.mmcontrol = pdata ? pdata->mmcontrol : NULL;
-	info->onenand.irq = platform_get_irq(pdev, 0);
+
+	err = platform_get_irq(pdev, 0);
+	if (err < 0)
+		goto out_iounmap;
+
+	info->onenand.irq = err;
 
 	info->mtd.dev.parent = &pdev->dev;
 	info->mtd.priv = &info->onenand;
@@ -83,7 +85,7 @@ out_free_info:
 	return err;
 }
 
-static int generic_onenand_remove(struct platform_device *pdev)
+static void generic_onenand_remove(struct platform_device *pdev)
 {
 	struct onenand_info *info = platform_get_drvdata(pdev);
 	struct resource *res = pdev->resource;
@@ -95,8 +97,6 @@ static int generic_onenand_remove(struct platform_device *pdev)
 		iounmap(info->onenand.base);
 		kfree(info);
 	}
-
-	return 0;
 }
 
 static struct platform_driver generic_onenand_driver = {
@@ -104,7 +104,7 @@ static struct platform_driver generic_onenand_driver = {
 		.name		= DRIVER_NAME,
 	},
 	.probe		= generic_onenand_probe,
-	.remove		= generic_onenand_remove,
+	.remove_new	= generic_onenand_remove,
 };
 
 module_platform_driver(generic_onenand_driver);

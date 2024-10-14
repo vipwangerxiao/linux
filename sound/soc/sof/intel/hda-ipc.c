@@ -1,9 +1,9 @@
-// SPDX-License-Identifier: (GPL-2.0 OR BSD-3-Clause)
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-3-Clause)
 //
 // This file is provided under a dual BSD/GPLv2 license.  When using or
 // redistributing this file, you may do so under either license.
 //
-// Copyright(c) 2018 Intel Corporation. All rights reserved.
+// Copyright(c) 2018 Intel Corporation
 //
 // Authors: Liam Girdwood <liam.r.girdwood@linux.intel.com>
 //	    Ranjani Sridharan <ranjani.sridharan@linux.intel.com>
@@ -15,8 +15,16 @@
  * Hardware interface for generic Intel audio DSP HDA IP
  */
 
+#include <sound/hda_register.h>
+#include <sound/sof/ipc4/header.h>
+#include <trace/events/sof_intel.h>
 #include "../ops.h"
 #include "hda.h"
+#include "telemetry.h"
+
+EXPORT_TRACEPOINT_SYMBOL(sof_intel_ipc_firmware_initiated);
+EXPORT_TRACEPOINT_SYMBOL(sof_intel_ipc_firmware_response);
+EXPORT_TRACEPOINT_SYMBOL(sof_intel_hda_irq_ipc_check);
 
 static void hda_dsp_ipc_host_done(struct snd_sof_dev *sdev)
 {
@@ -56,24 +64,75 @@ static void hda_dsp_ipc_dsp_done(struct snd_sof_dev *sdev)
 
 int hda_dsp_ipc_send_msg(struct snd_sof_dev *sdev, struct snd_sof_ipc_msg *msg)
 {
-	u32 cmd = msg->header;
-
 	/* send IPC message to DSP */
 	sof_mailbox_write(sdev, sdev->host_box.offset, msg->msg_data,
 			  msg->msg_size);
 	snd_sof_dsp_write(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCI,
-			  cmd | HDA_DSP_REG_HIPCI_BUSY);
+			  HDA_DSP_REG_HIPCI_BUSY);
 
 	return 0;
 }
+EXPORT_SYMBOL_NS(hda_dsp_ipc_send_msg, SND_SOC_SOF_INTEL_HDA_COMMON);
+
+static inline bool hda_dsp_ipc4_pm_msg(u32 primary)
+{
+	/* pm setting is only supported by module msg */
+	if (SOF_IPC4_MSG_IS_MODULE_MSG(primary) != SOF_IPC4_MODULE_MSG)
+		return false;
+
+	if (SOF_IPC4_MSG_TYPE_GET(primary) == SOF_IPC4_MOD_SET_DX ||
+	    SOF_IPC4_MSG_TYPE_GET(primary) == SOF_IPC4_MOD_SET_D0IX)
+		return true;
+
+	return false;
+}
+
+void hda_dsp_ipc4_schedule_d0i3_work(struct sof_intel_hda_dev *hdev,
+				     struct snd_sof_ipc_msg *msg)
+{
+	struct sof_ipc4_msg *msg_data = msg->msg_data;
+
+	/* Schedule a delayed work for d0i3 entry after sending non-pm ipc msg */
+	if (hda_dsp_ipc4_pm_msg(msg_data->primary))
+		return;
+
+	mod_delayed_work(system_wq, &hdev->d0i3_work,
+			 msecs_to_jiffies(SOF_HDA_D0I3_WORK_DELAY_MS));
+}
+EXPORT_SYMBOL_NS(hda_dsp_ipc4_schedule_d0i3_work, SND_SOC_SOF_INTEL_HDA_COMMON);
+
+int hda_dsp_ipc4_send_msg(struct snd_sof_dev *sdev, struct snd_sof_ipc_msg *msg)
+{
+	struct sof_intel_hda_dev *hdev = sdev->pdata->hw_pdata;
+	struct sof_ipc4_msg *msg_data = msg->msg_data;
+
+	if (hda_ipc4_tx_is_busy(sdev)) {
+		hdev->delayed_ipc_tx_msg = msg;
+		return 0;
+	}
+
+	hdev->delayed_ipc_tx_msg = NULL;
+
+	/* send the message via mailbox */
+	if (msg_data->data_size)
+		sof_mailbox_write(sdev, sdev->host_box.offset, msg_data->data_ptr,
+				  msg_data->data_size);
+
+	snd_sof_dsp_write(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCIE, msg_data->extension);
+	snd_sof_dsp_write(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCI,
+			  msg_data->primary | HDA_DSP_REG_HIPCI_BUSY);
+
+	hda_dsp_ipc4_schedule_d0i3_work(hdev, msg);
+
+	return 0;
+}
+EXPORT_SYMBOL_NS(hda_dsp_ipc4_send_msg, SND_SOC_SOF_INTEL_HDA_COMMON);
 
 void hda_dsp_ipc_get_reply(struct snd_sof_dev *sdev)
 {
 	struct snd_sof_ipc_msg *msg = sdev->msg;
 	struct sof_ipc_reply reply;
 	struct sof_ipc_cmd_hdr *hdr;
-	unsigned long flags;
-	int ret = 0;
 
 	/*
 	 * Sometimes, there is unexpected reply ipc arriving. The reply
@@ -84,124 +143,176 @@ void hda_dsp_ipc_get_reply(struct snd_sof_dev *sdev)
 		dev_warn(sdev->dev, "unexpected ipc interrupt raised!\n");
 		return;
 	}
-	spin_lock_irqsave(&sdev->ipc_lock, flags);
 
 	hdr = msg->msg_data;
-	if (hdr->cmd == (SOF_IPC_GLB_PM_MSG | SOF_IPC_PM_CTX_SAVE)) {
+	if (hdr->cmd == (SOF_IPC_GLB_PM_MSG | SOF_IPC_PM_CTX_SAVE) ||
+	    hdr->cmd == (SOF_IPC_GLB_PM_MSG | SOF_IPC_PM_GATE)) {
 		/*
 		 * memory windows are powered off before sending IPC reply,
-		 * so we can't read the mailbox for CTX_SAVE reply.
+		 * so we can't read the mailbox for CTX_SAVE and PM_GATE
+		 * replies.
 		 */
 		reply.error = 0;
 		reply.hdr.cmd = SOF_IPC_GLB_REPLY;
 		reply.hdr.size = sizeof(reply);
 		memcpy(msg->reply_data, &reply, sizeof(reply));
-		goto out;
+
+		msg->reply_error = 0;
+	} else {
+		snd_sof_ipc_get_reply(sdev);
+	}
+}
+EXPORT_SYMBOL_NS(hda_dsp_ipc_get_reply, SND_SOC_SOF_INTEL_HDA_COMMON);
+
+irqreturn_t hda_dsp_ipc4_irq_thread(int irq, void *context)
+{
+	struct sof_ipc4_msg notification_data = {{ 0 }};
+	struct snd_sof_dev *sdev = context;
+	bool ack_received = false;
+	bool ipc_irq = false;
+	u32 hipcie, hipct;
+
+	hipcie = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCIE);
+	hipct = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCT);
+
+	if (hipcie & HDA_DSP_REG_HIPCIE_DONE) {
+		/* DSP received the message */
+		snd_sof_dsp_update_bits(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCCTL,
+					HDA_DSP_REG_HIPCCTL_DONE, 0);
+		hda_dsp_ipc_dsp_done(sdev);
+
+		ipc_irq = true;
+		ack_received = true;
 	}
 
-	/* get IPC reply from DSP in the mailbox */
-	sof_mailbox_read(sdev, sdev->host_box.offset, &reply,
-			 sizeof(reply));
+	if (hipct & HDA_DSP_REG_HIPCT_BUSY) {
+		/* Message from DSP (reply or notification) */
+		u32 hipcte = snd_sof_dsp_read(sdev, HDA_DSP_BAR,
+					      HDA_DSP_REG_HIPCTE);
+		u32 primary = hipct & HDA_DSP_REG_HIPCT_MSG_MASK;
+		u32 extension = hipcte & HDA_DSP_REG_HIPCTE_MSG_MASK;
 
-	if (reply.error < 0) {
-		memcpy(msg->reply_data, &reply, sizeof(reply));
-		ret = reply.error;
-	} else {
-		/* reply correct size ? */
-		if (reply.hdr.size != msg->reply_size) {
-			dev_err(sdev->dev, "error: reply expected %zu got %u bytes\n",
-				msg->reply_size, reply.hdr.size);
-			ret = -EINVAL;
+		/* mask BUSY interrupt */
+		snd_sof_dsp_update_bits(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCCTL,
+					HDA_DSP_REG_HIPCCTL_BUSY, 0);
+
+		if (primary & SOF_IPC4_MSG_DIR_MASK) {
+			/* Reply received */
+			if (likely(sdev->fw_state == SOF_FW_BOOT_COMPLETE)) {
+				struct sof_ipc4_msg *data = sdev->ipc->msg.reply_data;
+
+				data->primary = primary;
+				data->extension = extension;
+
+				spin_lock_irq(&sdev->ipc_lock);
+
+				snd_sof_ipc_get_reply(sdev);
+				hda_dsp_ipc_host_done(sdev);
+				snd_sof_ipc_reply(sdev, data->primary);
+
+				spin_unlock_irq(&sdev->ipc_lock);
+			} else {
+				dev_dbg_ratelimited(sdev->dev,
+						    "IPC reply before FW_READY: %#x|%#x\n",
+						    primary, extension);
+			}
+		} else {
+			/* Notification received */
+
+			notification_data.primary = primary;
+			notification_data.extension = extension;
+			sdev->ipc->msg.rx_data = &notification_data;
+			snd_sof_ipc_msgs_rx(sdev);
+			sdev->ipc->msg.rx_data = NULL;
+
+			/* Let DSP know that we have finished processing the message */
+			hda_dsp_ipc_host_done(sdev);
 		}
 
-		/* read the message */
-		if (msg->reply_size > 0)
-			sof_mailbox_read(sdev, sdev->host_box.offset,
-					 msg->reply_data, msg->reply_size);
+		ipc_irq = true;
 	}
 
-out:
-	msg->reply_error = ret;
+	if (!ipc_irq)
+		/* This interrupt is not shared so no need to return IRQ_NONE. */
+		dev_dbg_ratelimited(sdev->dev, "nothing to do in IPC IRQ thread\n");
 
-	spin_unlock_irqrestore(&sdev->ipc_lock, flags);
-}
+	if (ack_received) {
+		struct sof_intel_hda_dev *hdev = sdev->pdata->hw_pdata;
 
-static bool hda_dsp_ipc_is_sof(uint32_t msg)
-{
-	return (msg & (HDA_DSP_IPC_PURGE_FW | 0xf << 9)) != msg ||
-		(msg & HDA_DSP_IPC_PURGE_FW) != HDA_DSP_IPC_PURGE_FW;
+		if (hdev->delayed_ipc_tx_msg)
+			hda_dsp_ipc4_send_msg(sdev, hdev->delayed_ipc_tx_msg);
+	}
+
+	return IRQ_HANDLED;
 }
+EXPORT_SYMBOL_NS(hda_dsp_ipc4_irq_thread, SND_SOC_SOF_INTEL_HDA_COMMON);
 
 /* IPC handler thread */
 irqreturn_t hda_dsp_ipc_irq_thread(int irq, void *context)
 {
 	struct snd_sof_dev *sdev = context;
-	irqreturn_t ret = IRQ_NONE;
 	u32 hipci;
 	u32 hipcie;
 	u32 hipct;
 	u32 hipcte;
-	u32 hipcctl;
 	u32 msg;
 	u32 msg_ext;
+	bool ipc_irq = false;
 
 	/* read IPC status */
 	hipcie = snd_sof_dsp_read(sdev, HDA_DSP_BAR,
 				  HDA_DSP_REG_HIPCIE);
 	hipct = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCT);
-	hipcctl = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCCTL);
-
-	/* reenable IPC interrupt */
-	snd_sof_dsp_update_bits(sdev, HDA_DSP_BAR, HDA_DSP_REG_ADSPIC,
-				HDA_DSP_ADSPIC_IPC, HDA_DSP_ADSPIC_IPC);
+	hipci = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCI);
+	hipcte = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCTE);
 
 	/* is this a reply message from the DSP */
-	if (hipcie & HDA_DSP_REG_HIPCIE_DONE &&
-	    hipcctl & HDA_DSP_REG_HIPCCTL_DONE) {
-		hipci = snd_sof_dsp_read(sdev, HDA_DSP_BAR,
-					 HDA_DSP_REG_HIPCI);
+	if (hipcie & HDA_DSP_REG_HIPCIE_DONE) {
 		msg = hipci & HDA_DSP_REG_HIPCI_MSG_MASK;
 		msg_ext = hipcie & HDA_DSP_REG_HIPCIE_MSG_MASK;
 
-		dev_vdbg(sdev->dev,
-			 "ipc: firmware response, msg:0x%x, msg_ext:0x%x\n",
-			 msg, msg_ext);
+		trace_sof_intel_ipc_firmware_response(sdev, msg, msg_ext);
 
 		/* mask Done interrupt */
 		snd_sof_dsp_update_bits(sdev, HDA_DSP_BAR,
 					HDA_DSP_REG_HIPCCTL,
 					HDA_DSP_REG_HIPCCTL_DONE, 0);
 
-		/* handle immediate reply from DSP core - ignore ROM messages */
-		if (hda_dsp_ipc_is_sof(msg)) {
+		/*
+		 * Make sure the interrupt thread cannot be preempted between
+		 * waking up the sender and re-enabling the interrupt. Also
+		 * protect against a theoretical race with sof_ipc_tx_message():
+		 * if the DSP is fast enough to receive an IPC message, reply to
+		 * it, and the host interrupt processing calls this function on
+		 * a different core from the one, where the sending is taking
+		 * place, the message might not yet be marked as expecting a
+		 * reply.
+		 */
+		if (likely(sdev->fw_state == SOF_FW_BOOT_COMPLETE)) {
+			spin_lock_irq(&sdev->ipc_lock);
+
+			/* handle immediate reply from DSP core */
 			hda_dsp_ipc_get_reply(sdev);
 			snd_sof_ipc_reply(sdev, msg);
+
+			/* set the done bit */
+			hda_dsp_ipc_dsp_done(sdev);
+
+			spin_unlock_irq(&sdev->ipc_lock);
+		} else {
+			dev_dbg_ratelimited(sdev->dev, "IPC reply before FW_READY: %#x\n",
+					    msg);
 		}
 
-		/* wake up sleeper if we are loading code */
-		if (sdev->code_loading)	{
-			sdev->code_loading = 0;
-			wake_up(&sdev->waitq);
-		}
-
-		/* set the done bit */
-		hda_dsp_ipc_dsp_done(sdev);
-
-		ret = IRQ_HANDLED;
+		ipc_irq = true;
 	}
 
 	/* is this a new message from DSP */
-	if (hipct & HDA_DSP_REG_HIPCT_BUSY &&
-	    hipcctl & HDA_DSP_REG_HIPCCTL_BUSY) {
-
-		hipcte = snd_sof_dsp_read(sdev, HDA_DSP_BAR,
-					  HDA_DSP_REG_HIPCTE);
+	if (hipct & HDA_DSP_REG_HIPCT_BUSY) {
 		msg = hipct & HDA_DSP_REG_HIPCT_MSG_MASK;
 		msg_ext = hipcte & HDA_DSP_REG_HIPCTE_MSG_MASK;
 
-		dev_vdbg(sdev->dev,
-			 "ipc: firmware initiated, msg:0x%x, msg_ext:0x%x\n",
-			 msg, msg_ext);
+		trace_sof_intel_ipc_firmware_initiated(sdev, msg, msg_ext);
 
 		/* mask BUSY interrupt */
 		snd_sof_dsp_update_bits(sdev, HDA_DSP_BAR,
@@ -210,8 +321,23 @@ irqreturn_t hda_dsp_ipc_irq_thread(int irq, void *context)
 
 		/* handle messages from DSP */
 		if ((hipct & SOF_IPC_PANIC_MAGIC_MASK) == SOF_IPC_PANIC_MAGIC) {
-			/* this is a PANIC message !! */
-			snd_sof_dsp_panic(sdev, HDA_DSP_PANIC_OFFSET(msg_ext));
+			struct sof_intel_hda_dev *hda = sdev->pdata->hw_pdata;
+			bool non_recoverable = true;
+
+			/*
+			 * This is a PANIC message!
+			 *
+			 * If it is arriving during firmware boot and it is not
+			 * the last boot attempt then change the non_recoverable
+			 * to false as the DSP might be able to boot in the next
+			 * iteration(s)
+			 */
+			if (sdev->fw_state == SOF_FW_BOOT_IN_PROGRESS &&
+			    hda->boot_iteration < HDA_FW_BOOT_ATTEMPTS)
+				non_recoverable = false;
+
+			snd_sof_dsp_panic(sdev, HDA_DSP_PANIC_OFFSET(msg_ext),
+					  non_recoverable);
 		} else {
 			/* normal message - process normally */
 			snd_sof_ipc_msgs_rx(sdev);
@@ -219,237 +345,212 @@ irqreturn_t hda_dsp_ipc_irq_thread(int irq, void *context)
 
 		hda_dsp_ipc_host_done(sdev);
 
-		ret = IRQ_HANDLED;
+		ipc_irq = true;
 	}
 
-	return ret;
-}
+	if (!ipc_irq) {
+		/*
+		 * This interrupt is not shared so no need to return IRQ_NONE.
+		 */
+		dev_dbg_ratelimited(sdev->dev,
+				    "nothing to do in IPC IRQ thread\n");
+	}
 
-/* is this IRQ for ADSP ? - we only care about IPC here */
-irqreturn_t hda_dsp_ipc_irq_handler(int irq, void *context)
+	return IRQ_HANDLED;
+}
+EXPORT_SYMBOL_NS(hda_dsp_ipc_irq_thread, SND_SOC_SOF_INTEL_HDA_COMMON);
+
+/* Check if an IPC IRQ occurred */
+bool hda_dsp_check_ipc_irq(struct snd_sof_dev *sdev)
 {
-	struct snd_sof_dev *sdev = context;
-	int ret = IRQ_NONE;
+	struct sof_intel_hda_dev *hda = sdev->pdata->hw_pdata;
+	bool ret = false;
 	u32 irq_status;
 
-	spin_lock(&sdev->hw_lock);
+	if (sdev->dspless_mode_selected)
+		return false;
 
 	/* store status */
 	irq_status = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_ADSPIS);
-	dev_vdbg(sdev->dev, "irq handler: irq_status:0x%x\n", irq_status);
+	trace_sof_intel_hda_irq_ipc_check(sdev, irq_status);
 
 	/* invalid message ? */
 	if (irq_status == 0xffffffff)
 		goto out;
 
 	/* IPC message ? */
-	if (irq_status & HDA_DSP_ADSPIS_IPC) {
-		/* disable IPC interrupt */
-		snd_sof_dsp_update_bits_unlocked(sdev, HDA_DSP_BAR,
-						 HDA_DSP_REG_ADSPIC,
-						 HDA_DSP_ADSPIC_IPC, 0);
-		ret = IRQ_WAKE_THREAD;
+	if (irq_status & HDA_DSP_ADSPIS_IPC)
+		ret = true;
+
+	/* CLDMA message ? */
+	if (irq_status & HDA_DSP_ADSPIS_CL_DMA) {
+		hda->code_loading = 0;
+		wake_up(&hda->waitq);
+		ret = false;
 	}
 
 out:
-	spin_unlock(&sdev->hw_lock);
 	return ret;
 }
+EXPORT_SYMBOL_NS(hda_dsp_check_ipc_irq, SND_SOC_SOF_INTEL_HDA_COMMON);
 
-/* IPC Firmware ready */
-
-static void ipc_get_windows(struct snd_sof_dev *sdev)
+int hda_dsp_ipc_get_mailbox_offset(struct snd_sof_dev *sdev)
 {
-	struct sof_ipc_window_elem *elem;
-	u32 outbox_offset = 0;
-	u32 stream_offset = 0;
-	u32 inbox_offset = 0;
-	u32 outbox_size = 0;
-	u32 stream_size = 0;
-	u32 inbox_size = 0;
-	int i;
-
-	if (!sdev->info_window) {
-		dev_err(sdev->dev, "error: have no window info\n");
-		return;
-	}
-
-	for (i = 0; i < sdev->info_window->num_windows; i++) {
-		elem = &sdev->info_window->window[i];
-
-		switch (elem->type) {
-		case SOF_IPC_REGION_UPBOX:
-			inbox_offset =
-				elem->offset + SRAM_WINDOW_OFFSET(elem->id);
-			inbox_size = elem->size;
-			snd_sof_debugfs_io_item(sdev,
-						sdev->bar[HDA_DSP_BAR] +
-						inbox_offset,
-						elem->size, "inbox",
-						SOF_DEBUGFS_ACCESS_D0_ONLY);
-			break;
-		case SOF_IPC_REGION_DOWNBOX:
-			outbox_offset =
-				elem->offset + SRAM_WINDOW_OFFSET(elem->id);
-			outbox_size = elem->size;
-			snd_sof_debugfs_io_item(sdev,
-						sdev->bar[HDA_DSP_BAR] +
-						outbox_offset,
-						elem->size, "outbox",
-						SOF_DEBUGFS_ACCESS_D0_ONLY);
-			break;
-		case SOF_IPC_REGION_TRACE:
-			snd_sof_debugfs_io_item(sdev,
-						sdev->bar[HDA_DSP_BAR] +
-						elem->offset +
-						SRAM_WINDOW_OFFSET
-						(elem->id),
-						elem->size, "etrace",
-						SOF_DEBUGFS_ACCESS_D0_ONLY);
-			break;
-		case SOF_IPC_REGION_DEBUG:
-			snd_sof_debugfs_io_item(sdev,
-						sdev->bar[HDA_DSP_BAR] +
-						elem->offset +
-						SRAM_WINDOW_OFFSET
-						(elem->id),
-						elem->size, "debug",
-						SOF_DEBUGFS_ACCESS_D0_ONLY);
-			break;
-		case SOF_IPC_REGION_STREAM:
-			stream_offset =
-				elem->offset + SRAM_WINDOW_OFFSET(elem->id);
-			stream_size = elem->size;
-			snd_sof_debugfs_io_item(sdev,
-						sdev->bar[HDA_DSP_BAR] +
-						elem->offset +
-						SRAM_WINDOW_OFFSET
-						(elem->id),
-						elem->size, "stream",
-						SOF_DEBUGFS_ACCESS_D0_ONLY);
-			break;
-		case SOF_IPC_REGION_REGS:
-			snd_sof_debugfs_io_item(sdev,
-						sdev->bar[HDA_DSP_BAR] +
-						elem->offset +
-						SRAM_WINDOW_OFFSET
-						(elem->id),
-						elem->size, "regs",
-						SOF_DEBUGFS_ACCESS_D0_ONLY);
-			break;
-		case SOF_IPC_REGION_EXCEPTION:
-			sdev->dsp_oops_offset = elem->offset +
-						SRAM_WINDOW_OFFSET(elem->id);
-			snd_sof_debugfs_io_item(sdev,
-						sdev->bar[HDA_DSP_BAR] +
-						elem->offset +
-						SRAM_WINDOW_OFFSET
-						(elem->id),
-						elem->size, "exception",
-						SOF_DEBUGFS_ACCESS_D0_ONLY);
-			break;
-		default:
-			dev_err(sdev->dev, "error: get illegal window info\n");
-			return;
-		}
-	}
-
-	if (outbox_size == 0 || inbox_size == 0) {
-		dev_err(sdev->dev, "error: get illegal mailbox window\n");
-		return;
-	}
-
-	snd_sof_dsp_mailbox_init(sdev, inbox_offset, inbox_size,
-				 outbox_offset, outbox_size);
-	sdev->stream_box.offset = stream_offset;
-	sdev->stream_box.size = stream_size;
-
-	dev_dbg(sdev->dev, " mailbox upstream 0x%x - size 0x%x\n",
-		inbox_offset, inbox_size);
-	dev_dbg(sdev->dev, " mailbox downstream 0x%x - size 0x%x\n",
-		outbox_offset, outbox_size);
-	dev_dbg(sdev->dev, " stream region 0x%x - size 0x%x\n",
-		stream_offset, stream_size);
+	return HDA_DSP_MBOX_UPLINK_OFFSET;
 }
+EXPORT_SYMBOL_NS(hda_dsp_ipc_get_mailbox_offset, SND_SOC_SOF_INTEL_HDA_COMMON);
 
-/* check for ABI compatibility and create memory windows on first boot */
-int hda_dsp_ipc_fw_ready(struct snd_sof_dev *sdev, u32 msg_id)
+int hda_dsp_ipc_get_window_offset(struct snd_sof_dev *sdev, u32 id)
 {
-	struct sof_ipc_fw_ready *fw_ready = &sdev->fw_ready;
-	u32 offset;
-	int ret;
-
-	/* mailbox must be on 4k boundary */
-	offset = HDA_DSP_MBOX_UPLINK_OFFSET;
-
-	dev_dbg(sdev->dev, "ipc: DSP is ready 0x%8.8x offset 0x%x\n",
-		msg_id, offset);
-
-	/* no need to re-check version/ABI for subsequent boots */
-	if (!sdev->first_boot)
-		return 0;
-
-	/* copy data from the DSP FW ready offset */
-	sof_block_read(sdev, sdev->mmio_bar, offset, fw_ready,
-		       sizeof(*fw_ready));
-
-	/* make sure ABI version is compatible */
-	ret = snd_sof_ipc_valid(sdev);
-	if (ret < 0)
-		return ret;
-
-	/* now check for extended data */
-	snd_sof_fw_parse_ext_data(sdev, sdev->mmio_bar,
-				  HDA_DSP_MBOX_UPLINK_OFFSET +
-				  sizeof(struct sof_ipc_fw_ready));
-
-	ipc_get_windows(sdev);
-
-	return 0;
+	return SRAM_WINDOW_OFFSET(id);
 }
+EXPORT_SYMBOL_NS(hda_dsp_ipc_get_window_offset, SND_SOC_SOF_INTEL_HDA_COMMON);
 
-void hda_ipc_msg_data(struct snd_sof_dev *sdev,
-		      struct snd_pcm_substream *substream,
-		      void *p, size_t sz)
+int hda_ipc_msg_data(struct snd_sof_dev *sdev,
+		     struct snd_sof_pcm_stream *sps,
+		     void *p, size_t sz)
 {
-	if (!substream || !sdev->stream_box.size) {
+	if (!sps || !sdev->stream_box.size) {
 		sof_mailbox_read(sdev, sdev->dsp_box.offset, p, sz);
 	} else {
+		struct snd_pcm_substream *substream = sps->substream;
 		struct hdac_stream *hstream = substream->runtime->private_data;
 		struct sof_intel_hda_stream *hda_stream;
 
 		hda_stream = container_of(hstream,
 					  struct sof_intel_hda_stream,
-					  hda_stream.hstream);
+					  hext_stream.hstream);
 
 		/* The stream might already be closed */
-		if (hstream)
-			sof_mailbox_read(sdev, hda_stream->stream.posn_offset,
-					 p, sz);
-	}
-}
+		if (!hstream)
+			return -ESTRPIPE;
 
-int hda_ipc_pcm_params(struct snd_sof_dev *sdev,
-		       struct snd_pcm_substream *substream,
-		       const struct sof_ipc_pcm_params_reply *reply)
+		sof_mailbox_read(sdev, hda_stream->sof_intel_stream.posn_offset, p, sz);
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_NS(hda_ipc_msg_data, SND_SOC_SOF_INTEL_HDA_COMMON);
+
+int hda_set_stream_data_offset(struct snd_sof_dev *sdev,
+			       struct snd_sof_pcm_stream *sps,
+			       size_t posn_offset)
 {
+	struct snd_pcm_substream *substream = sps->substream;
 	struct hdac_stream *hstream = substream->runtime->private_data;
 	struct sof_intel_hda_stream *hda_stream;
-	/* validate offset */
-	size_t posn_offset = reply->posn_offset;
 
 	hda_stream = container_of(hstream, struct sof_intel_hda_stream,
-				  hda_stream.hstream);
+				  hext_stream.hstream);
 
 	/* check for unaligned offset or overflow */
 	if (posn_offset > sdev->stream_box.size ||
 	    posn_offset % sizeof(struct sof_ipc_stream_posn) != 0)
 		return -EINVAL;
 
-	hda_stream->stream.posn_offset = sdev->stream_box.offset + posn_offset;
+	hda_stream->sof_intel_stream.posn_offset = sdev->stream_box.offset + posn_offset;
 
 	dev_dbg(sdev->dev, "pcm: stream dir %d, posn mailbox offset is %zu",
-		substream->stream, hda_stream->stream.posn_offset);
+		substream->stream, hda_stream->sof_intel_stream.posn_offset);
 
 	return 0;
 }
+EXPORT_SYMBOL_NS(hda_set_stream_data_offset, SND_SOC_SOF_INTEL_HDA_COMMON);
+
+void hda_ipc4_dsp_dump(struct snd_sof_dev *sdev, u32 flags)
+{
+	char *level = (flags & SOF_DBG_DUMP_OPTIONAL) ? KERN_DEBUG : KERN_ERR;
+
+	/* print ROM/FW status */
+	hda_dsp_get_state(sdev, level);
+
+	if (flags & SOF_DBG_DUMP_REGS)
+		sof_ipc4_intel_dump_telemetry_state(sdev, flags);
+	else
+		hda_dsp_dump_ext_rom_status(sdev, level, flags);
+}
+EXPORT_SYMBOL_NS(hda_ipc4_dsp_dump, SND_SOC_SOF_INTEL_HDA_COMMON);
+
+bool hda_check_ipc_irq(struct snd_sof_dev *sdev)
+{
+	const struct sof_intel_dsp_desc *chip;
+
+	chip = get_chip_info(sdev->pdata);
+	if (chip && chip->check_ipc_irq)
+		return chip->check_ipc_irq(sdev);
+
+	return false;
+}
+EXPORT_SYMBOL_NS(hda_check_ipc_irq, SND_SOC_SOF_INTEL_HDA_COMMON);
+
+void hda_ipc_irq_dump(struct snd_sof_dev *sdev)
+{
+	u32 adspis;
+	u32 intsts;
+	u32 intctl;
+	u32 ppsts;
+	u8 rirbsts;
+
+	/* read key IRQ stats and config registers */
+	adspis = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_ADSPIS);
+	intsts = snd_sof_dsp_read(sdev, HDA_DSP_HDA_BAR, SOF_HDA_INTSTS);
+	intctl = snd_sof_dsp_read(sdev, HDA_DSP_HDA_BAR, SOF_HDA_INTCTL);
+	ppsts = snd_sof_dsp_read(sdev, HDA_DSP_PP_BAR, SOF_HDA_REG_PP_PPSTS);
+	rirbsts = snd_sof_dsp_read8(sdev, HDA_DSP_HDA_BAR, AZX_REG_RIRBSTS);
+
+	dev_err(sdev->dev, "hda irq intsts 0x%8.8x intlctl 0x%8.8x rirb %2.2x\n",
+		intsts, intctl, rirbsts);
+	dev_err(sdev->dev, "dsp irq ppsts 0x%8.8x adspis 0x%8.8x\n", ppsts, adspis);
+}
+EXPORT_SYMBOL_NS(hda_ipc_irq_dump, SND_SOC_SOF_INTEL_HDA_COMMON);
+
+void hda_ipc_dump(struct snd_sof_dev *sdev)
+{
+	u32 hipcie;
+	u32 hipct;
+	u32 hipcctl;
+
+	hda_ipc_irq_dump(sdev);
+
+	/* read IPC status */
+	hipcie = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCIE);
+	hipct = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCT);
+	hipcctl = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCCTL);
+
+	/* dump the IPC regs */
+	/* TODO: parse the raw msg */
+	dev_err(sdev->dev, "host status 0x%8.8x dsp status 0x%8.8x mask 0x%8.8x\n",
+		hipcie, hipct, hipcctl);
+}
+EXPORT_SYMBOL_NS(hda_ipc_dump, SND_SOC_SOF_INTEL_HDA_COMMON);
+
+void hda_ipc4_dump(struct snd_sof_dev *sdev)
+{
+	u32 hipci, hipcie, hipct, hipcte, hipcctl;
+
+	hda_ipc_irq_dump(sdev);
+
+	hipci = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCI);
+	hipcie = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCIE);
+	hipct = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCT);
+	hipcte = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCTE);
+	hipcctl = snd_sof_dsp_read(sdev, HDA_DSP_BAR, HDA_DSP_REG_HIPCCTL);
+
+	/* dump the IPC regs */
+	/* TODO: parse the raw msg */
+	dev_err(sdev->dev, "Host IPC initiator: %#x|%#x, target: %#x|%#x, ctl: %#x\n",
+		hipci, hipcie, hipct, hipcte, hipcctl);
+}
+EXPORT_SYMBOL_NS(hda_ipc4_dump, SND_SOC_SOF_INTEL_HDA_COMMON);
+
+bool hda_ipc4_tx_is_busy(struct snd_sof_dev *sdev)
+{
+	struct sof_intel_hda_dev *hda = sdev->pdata->hw_pdata;
+	const struct sof_intel_dsp_desc *chip = hda->desc;
+	u32 val;
+
+	val = snd_sof_dsp_read(sdev, HDA_DSP_BAR, chip->ipc_req);
+
+	return !!(val & chip->ipc_req_mask);
+}
+EXPORT_SYMBOL_NS(hda_ipc4_tx_is_busy, SND_SOC_SOF_INTEL_HDA_COMMON);

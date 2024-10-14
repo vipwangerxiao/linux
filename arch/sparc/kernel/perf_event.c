@@ -891,6 +891,10 @@ static int sparc_perf_event_set_period(struct perf_event *event,
 	s64 period = hwc->sample_period;
 	int ret = 0;
 
+	/* The period may have been changed by PERF_EVENT_IOC_PERIOD */
+	if (unlikely(period != hwc->last_period))
+		left = period - (hwc->last_period - left);
+
 	if (unlikely(left <= -period)) {
 		left = period;
 		local64_set(&hwc->period_left, left);
@@ -975,7 +979,7 @@ out:
 
 static void sparc_pmu_start(struct perf_event *event, int flags);
 
-/* On this PMU each PIC has it's own PCR control register.  */
+/* On this PMU each PIC has its own PCR control register.  */
 static void calculate_multiple_pcrs(struct cpu_hw_events *cpuc)
 {
 	int i;

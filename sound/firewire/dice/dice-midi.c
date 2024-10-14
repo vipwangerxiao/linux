@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * dice_midi.c - a part of driver for Dice based devices
  *
  * Copyright (c) 2014 Takashi Sakamoto
- *
- * Licensed under the terms of the GNU General Public License, version 2.
  */
 #include "dice.h"
 
@@ -18,8 +17,13 @@ static int midi_open(struct snd_rawmidi_substream *substream)
 
 	mutex_lock(&dice->mutex);
 
-	dice->substreams_counter++;
-	err = snd_dice_stream_start_duplex(dice, 0);
+	err = snd_dice_stream_reserve_duplex(dice, 0, 0, 0);
+	if (err >= 0) {
+		++dice->substreams_counter;
+		err = snd_dice_stream_start_duplex(dice);
+		if (err < 0)
+			--dice->substreams_counter;
+	}
 
 	mutex_unlock(&dice->mutex);
 
@@ -35,7 +39,7 @@ static int midi_close(struct snd_rawmidi_substream *substream)
 
 	mutex_lock(&dice->mutex);
 
-	dice->substreams_counter--;
+	--dice->substreams_counter;
 	snd_dice_stream_stop_duplex(dice);
 
 	mutex_unlock(&dice->mutex);
@@ -84,8 +88,8 @@ static void set_midi_substream_names(struct snd_dice *dice,
 	struct snd_rawmidi_substream *subs;
 
 	list_for_each_entry(subs, &str->substreams, list) {
-		snprintf(subs->name, sizeof(subs->name),
-			 "%s MIDI %d", dice->card->shortname, subs->number + 1);
+		scnprintf(subs->name, sizeof(subs->name),
+			  "%s MIDI %d", dice->card->shortname, subs->number + 1);
 	}
 }
 

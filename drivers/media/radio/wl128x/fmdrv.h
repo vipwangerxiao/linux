@@ -1,19 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *  FM Driver for Connectivity chip of Texas Instruments.
  *
  *  Common header for all FM driver sub-modules.
  *
  *  Copyright (C) 2011 Texas Instruments
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
  */
 
 #ifndef _FM_DRV_H
@@ -24,6 +15,7 @@
 #include <sound/core.h>
 #include <sound/initval.h>
 #include <linux/timer.h>
+#include <linux/workqueue.h>
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-common.h>
 #include <media/v4l2-device.h>
@@ -209,10 +201,10 @@ struct fmdev {
 	int streg_cbdata; /* status of ST registration */
 
 	struct sk_buff_head rx_q;	/* RX queue */
-	struct tasklet_struct rx_task;	/* RX Tasklet */
+	struct work_struct rx_bh_work;	/* RX BH Work */
 
 	struct sk_buff_head tx_q;	/* TX queue */
-	struct tasklet_struct tx_task;	/* TX Tasklet */
+	struct work_struct tx_bh_work;	/* TX BH Work */
 	unsigned long last_tx_jiffies;	/* Timestamp of last pkt sent */
 	atomic_t tx_cnt;	/* Number of packets can send at a time */
 

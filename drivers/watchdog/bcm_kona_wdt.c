@@ -143,24 +143,18 @@ static void bcm_kona_wdt_debug_init(struct platform_device *pdev)
 	wdt->debugfs = NULL;
 
 	dir = debugfs_create_dir(BCM_KONA_WDT_NAME, NULL);
-	if (IS_ERR_OR_NULL(dir))
-		return;
 
-	if (debugfs_create_file("info", S_IFREG | S_IRUGO, dir, wdt,
-				&bcm_kona_fops))
-		wdt->debugfs = dir;
-	else
-		debugfs_remove_recursive(dir);
+	debugfs_create_file("info", S_IFREG | S_IRUGO, dir, wdt,
+			    &bcm_kona_fops);
+	wdt->debugfs = dir;
 }
 
 static void bcm_kona_wdt_debug_exit(struct platform_device *pdev)
 {
 	struct bcm_kona_wdt *wdt = platform_get_drvdata(pdev);
 
-	if (wdt && wdt->debugfs) {
+	if (wdt)
 		debugfs_remove_recursive(wdt->debugfs);
-		wdt->debugfs = NULL;
-	}
 }
 
 #else
@@ -285,7 +279,7 @@ static int bcm_kona_wdt_probe(struct platform_device *pdev)
 
 	wdt->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(wdt->base))
-		return -ENODEV;
+		return PTR_ERR(wdt->base);
 
 	wdt->resolution = SECWDOG_DEFAULT_RESOLUTION;
 	ret = bcm_kona_wdt_set_resolution_reg(wdt);
@@ -307,10 +301,8 @@ static int bcm_kona_wdt_probe(struct platform_device *pdev)
 	watchdog_stop_on_reboot(&bcm_kona_wdt_wdd);
 	watchdog_stop_on_unregister(&bcm_kona_wdt_wdd);
 	ret = devm_watchdog_register_device(dev, &bcm_kona_wdt_wdd);
-	if (ret) {
-		dev_err(dev, "Failed to register watchdog device");
+	if (ret)
 		return ret;
-	}
 
 	bcm_kona_wdt_debug_init(pdev);
 	dev_dbg(dev, "Broadcom Kona Watchdog Timer");
@@ -318,12 +310,10 @@ static int bcm_kona_wdt_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int bcm_kona_wdt_remove(struct platform_device *pdev)
+static void bcm_kona_wdt_remove(struct platform_device *pdev)
 {
 	bcm_kona_wdt_debug_exit(pdev);
 	dev_dbg(&pdev->dev, "Watchdog driver disabled");
-
-	return 0;
 }
 
 static const struct of_device_id bcm_kona_wdt_of_match[] = {
@@ -338,7 +328,7 @@ static struct platform_driver bcm_kona_wdt_driver = {
 			.of_match_table = bcm_kona_wdt_of_match,
 		  },
 	.probe = bcm_kona_wdt_probe,
-	.remove = bcm_kona_wdt_remove,
+	.remove_new = bcm_kona_wdt_remove,
 };
 
 module_platform_driver(bcm_kona_wdt_driver);

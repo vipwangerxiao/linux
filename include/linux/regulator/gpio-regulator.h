@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * gpio-regulator.h
  *
@@ -11,11 +12,6 @@
  *
  * Copyright (c) 2009 Nokia Corporation
  * Roger Quadros <ext-roger.quadros@nokia.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of the
- * License, or (at your option) any later version.
  */
 
 #ifndef __REGULATOR_GPIO_H
@@ -46,6 +42,7 @@ struct gpio_regulator_state {
 /**
  * struct gpio_regulator_config - config structure
  * @supply_name:	Name of the regulator supply
+ * @input_supply:	Name of the input regulator supply
  * @enabled_at_boot:	Whether regulator has been enabled at
  *			boot or not. 1 = Yes, 0 = No
  *			This is used to keep the regulator at
@@ -66,6 +63,7 @@ struct gpio_regulator_state {
  */
 struct gpio_regulator_config {
 	const char *supply_name;
+	const char *input_supply;
 
 	unsigned enabled_at_boot:1;
 	unsigned startup_delay;

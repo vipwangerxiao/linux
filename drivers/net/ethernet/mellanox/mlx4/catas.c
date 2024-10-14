@@ -194,7 +194,7 @@ void mlx4_enter_error_state(struct mlx4_dev_persistent *persist)
 	mutex_unlock(&persist->device_state_mutex);
 
 	/* At that step HW was already reset, now notify clients */
-	mlx4_dispatch_event(dev, MLX4_DEV_EVENT_CATASTROPHIC_ERROR, 0);
+	mlx4_dispatch_event(dev, MLX4_DEV_EVENT_CATASTROPHIC_ERROR, NULL);
 	mlx4_cmd_wake_completions(dev);
 	return;
 
@@ -204,17 +204,22 @@ out:
 
 static void mlx4_handle_error_state(struct mlx4_dev_persistent *persist)
 {
+	struct mlx4_dev *dev = persist->dev;
+	struct devlink *devlink;
 	int err = 0;
 
 	mlx4_enter_error_state(persist);
+	devlink = priv_to_devlink(mlx4_priv(dev));
+	devl_lock(devlink);
 	mutex_lock(&persist->interface_state_mutex);
 	if (persist->interface_state & MLX4_INTERFACE_STATE_UP &&
 	    !(persist->interface_state & MLX4_INTERFACE_STATE_DELETION)) {
-		err = mlx4_restart_one(persist->pdev, false, NULL);
+		err = mlx4_restart_one(persist->pdev);
 		mlx4_info(persist->dev, "mlx4_restart_one was ended, ret=%d\n",
 			  err);
 	}
 	mutex_unlock(&persist->interface_state_mutex);
+	devl_unlock(devlink);
 }
 
 static void dump_err_buf(struct mlx4_dev *dev)

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * random utiility code, for bcache but in theory not specific to bcache
+ * random utility code, for bcache but in theory not specific to bcache
  *
  * Copyright 2010, 2011 Kent Overstreet <kent.overstreet@gmail.com>
  * Copyright 2012 Google, Inc.
@@ -33,27 +33,27 @@ int bch_ ## name ## _h(const char *cp, type *res)		\
 	case 'y':						\
 	case 'z':						\
 		u++;						\
-		/* fall through */				\
+		fallthrough;					\
 	case 'e':						\
 		u++;						\
-		/* fall through */				\
+		fallthrough;					\
 	case 'p':						\
 		u++;						\
-		/* fall through */				\
+		fallthrough;					\
 	case 't':						\
 		u++;						\
-		/* fall through */				\
+		fallthrough;					\
 	case 'g':						\
 		u++;						\
-		/* fall through */				\
+		fallthrough;					\
 	case 'm':						\
 		u++;						\
-		/* fall through */				\
+		fallthrough;					\
 	case 'k':						\
 		u++;						\
 		if (e++ == cp)					\
 			return -EINVAL;				\
-		/* fall through */				\
+		fallthrough;					\
 	case '\n':						\
 	case '\0':						\
 		if (*e == '\n')					\

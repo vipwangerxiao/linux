@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Freescale i.MX7D ADC driver
  *
  * Copyright (C) 2015 Freescale Semiconductor, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/clk.h>
@@ -15,7 +11,9 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 
@@ -82,6 +80,7 @@
 #define IMX7D_REG_ADC_INT_STATUS_CHANNEL_CONV_TIME_OUT		0xf0000
 
 #define IMX7D_ADC_TIMEOUT		msecs_to_jiffies(100)
+#define IMX7D_ADC_INPUT_CLK		24000000
 
 enum imx7d_adc_clk_pre_div {
 	IMX7D_ADC_ANALOG_CLK_PRE_DIV_4,
@@ -104,15 +103,14 @@ struct imx7d_adc_feature {
 	enum imx7d_adc_average_num avg_num;
 
 	u32 core_time_unit;	/* impact the sample rate */
-
-	bool average_en;
 };
 
 struct imx7d_adc {
 	struct device *dev;
 	void __iomem *regs;
 	struct clk *clk;
-
+	/* lock to protect against multiple access to the device */
+	struct mutex lock;
 	u32 vref_uv;
 	u32 value;
 	u32 channel;
@@ -183,7 +181,6 @@ static void imx7d_adc_feature_config(struct imx7d_adc *info)
 	info->adc_feature.clk_pre_div = IMX7D_ADC_ANALOG_CLK_PRE_DIV_4;
 	info->adc_feature.avg_num = IMX7D_ADC_AVERAGE_NUM_32;
 	info->adc_feature.core_time_unit = 1;
-	info->adc_feature.average_en = true;
 }
 
 static void imx7d_adc_sample_rate_set(struct imx7d_adc *info)
@@ -244,9 +241,8 @@ static void imx7d_adc_channel_set(struct imx7d_adc *info)
 
 	/* the channel choose single conversion, and enable average mode */
 	cfg1 |= (IMX7D_REG_ADC_CH_CFG1_CHANNEL_EN |
-		 IMX7D_REG_ADC_CH_CFG1_CHANNEL_SINGLE);
-	if (info->adc_feature.average_en)
-		cfg1 |= IMX7D_REG_ADC_CH_CFG1_CHANNEL_AVG_EN;
+		 IMX7D_REG_ADC_CH_CFG1_CHANNEL_SINGLE |
+		 IMX7D_REG_ADC_CH_CFG1_CHANNEL_AVG_EN);
 
 	/*
 	 * physical channel 0 chose logical channel A
@@ -276,13 +272,11 @@ static void imx7d_adc_channel_set(struct imx7d_adc *info)
 
 static u32 imx7d_adc_get_sample_rate(struct imx7d_adc *info)
 {
-	/* input clock is always 24MHz */
-	u32 input_clk = 24000000;
 	u32 analogue_core_clk;
 	u32 core_time_unit = info->adc_feature.core_time_unit;
 	u32 tmp;
 
-	analogue_core_clk = input_clk / info->pre_div_num;
+	analogue_core_clk = IMX7D_ADC_INPUT_CLK / info->pre_div_num;
 	tmp = (core_time_unit + 1) * 6;
 
 	return analogue_core_clk / tmp;
@@ -301,7 +295,7 @@ static int imx7d_adc_read_raw(struct iio_dev *indio_dev,
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
-		mutex_lock(&indio_dev->mlock);
+		mutex_lock(&info->lock);
 		reinit_completion(&info->completion);
 
 		channel = chan->channel & 0x03;
@@ -311,16 +305,16 @@ static int imx7d_adc_read_raw(struct iio_dev *indio_dev,
 		ret = wait_for_completion_interruptible_timeout
 				(&info->completion, IMX7D_ADC_TIMEOUT);
 		if (ret == 0) {
-			mutex_unlock(&indio_dev->mlock);
+			mutex_unlock(&info->lock);
 			return -ETIMEDOUT;
 		}
 		if (ret < 0) {
-			mutex_unlock(&indio_dev->mlock);
+			mutex_unlock(&info->lock);
 			return ret;
 		}
 
 		*val = info->value;
-		mutex_unlock(&indio_dev->mlock);
+		mutex_unlock(&info->lock);
 		return IIO_VAL_INT;
 
 	case IIO_CHAN_INFO_SCALE:
@@ -497,47 +491,33 @@ static int imx7d_adc_probe(struct platform_device *pdev)
 	info->dev = dev;
 
 	info->regs = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(info->regs)) {
-		ret = PTR_ERR(info->regs);
-		dev_err(dev, "Failed to remap adc memory, err = %d\n", ret);
-		return ret;
-	}
+	if (IS_ERR(info->regs))
+		return PTR_ERR(info->regs);
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(dev, "No irq resource?\n");
+	if (irq < 0)
 		return irq;
-	}
 
 	info->clk = devm_clk_get(dev, "adc");
-	if (IS_ERR(info->clk)) {
-		ret = PTR_ERR(info->clk);
-		dev_err(dev, "Failed getting clock, err = %d\n", ret);
-		return ret;
-	}
+	if (IS_ERR(info->clk))
+		return dev_err_probe(dev, PTR_ERR(info->clk), "Failed getting clock\n");
 
 	info->vref = devm_regulator_get(dev, "vref");
-	if (IS_ERR(info->vref)) {
-		ret = PTR_ERR(info->vref);
-		dev_err(dev,
-			"Failed getting reference voltage, err = %d\n", ret);
-		return ret;
-	}
+	if (IS_ERR(info->vref))
+		return dev_err_probe(dev, PTR_ERR(info->vref),
+				     "Failed getting reference voltage\n");
 
 	platform_set_drvdata(pdev, indio_dev);
 
 	init_completion(&info->completion);
 
 	indio_dev->name = dev_name(dev);
-	indio_dev->dev.parent = dev;
 	indio_dev->info = &imx7d_adc_iio_info;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->channels = imx7d_adc_iio_channels;
 	indio_dev->num_channels = ARRAY_SIZE(imx7d_adc_iio_channels);
 
-	ret = devm_request_irq(dev, irq,
-			       imx7d_adc_isr, 0,
-			       dev_name(dev), info);
+	ret = devm_request_irq(dev, irq, imx7d_adc_isr, 0, dev_name(dev), info);
 	if (ret < 0) {
 		dev_err(dev, "Failed requesting irq, irq = %d\n", irq);
 		return ret;
@@ -545,14 +525,15 @@ static int imx7d_adc_probe(struct platform_device *pdev)
 
 	imx7d_adc_feature_config(info);
 
-	ret = imx7d_adc_enable(&indio_dev->dev);
+	ret = imx7d_adc_enable(dev);
 	if (ret)
 		return ret;
 
-	ret = devm_add_action_or_reset(dev, __imx7d_adc_disable,
-				       &indio_dev->dev);
+	ret = devm_add_action_or_reset(dev, __imx7d_adc_disable, dev);
 	if (ret)
 		return ret;
+
+	mutex_init(&info->lock);
 
 	ret = devm_iio_device_register(dev, indio_dev);
 	if (ret) {
@@ -563,14 +544,15 @@ static int imx7d_adc_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static SIMPLE_DEV_PM_OPS(imx7d_adc_pm_ops, imx7d_adc_disable, imx7d_adc_enable);
+static DEFINE_SIMPLE_DEV_PM_OPS(imx7d_adc_pm_ops, imx7d_adc_disable,
+				imx7d_adc_enable);
 
 static struct platform_driver imx7d_adc_driver = {
 	.probe		= imx7d_adc_probe,
 	.driver		= {
 		.name	= "imx7d_adc",
 		.of_match_table = imx7d_adc_match,
-		.pm	= &imx7d_adc_pm_ops,
+		.pm	= pm_sleep_ptr(&imx7d_adc_pm_ops),
 	},
 };
 

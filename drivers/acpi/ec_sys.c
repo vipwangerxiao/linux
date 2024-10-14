@@ -1,11 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ec_sys.c
  *
  * Copyright (C) 2010 SUSE Products GmbH/Novell
  * Author:
  *      Thomas Renninger <trenn@suse.de>
- *
- * This work is licensed under the terms of the GNU GPL, version 2.
  */
 
 #include <linux/kernel.h>
@@ -20,7 +19,7 @@ MODULE_DESCRIPTION("ACPI EC sysfs access driver");
 MODULE_LICENSE("GPL");
 
 static bool write_support;
-module_param(write_support, bool, 0644);
+module_param_hw(write_support, bool, other, 0644);
 MODULE_PARM_DESC(write_support, "Dangerous, reboot and removal of battery may "
 		 "be needed.");
 

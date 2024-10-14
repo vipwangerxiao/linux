@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013 Samsung Electronics Co., Ltd.
  * Author: Padmavathi Venna <padma.v@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Common Clock Framework support for Audio Subsystem Clock Controller.
 */
@@ -13,8 +10,7 @@
 #include <linux/io.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
-#include <linux/of_address.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -132,7 +128,6 @@ static int exynos_audss_clk_probe(struct platform_device *pdev)
 	struct clk *pll_ref, *pll_in, *cdclk, *sclk_audio, *sclk_pcm_in;
 	const struct exynos_audss_clk_drvdata *variant;
 	struct clk_hw **clk_table;
-	struct resource *res;
 	struct device *dev = &pdev->dev;
 	int i, ret = 0;
 
@@ -140,8 +135,7 @@ static int exynos_audss_clk_probe(struct platform_device *pdev)
 	if (!variant)
 		return -EINVAL;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	reg_base = devm_ioremap_resource(dev, res);
+	reg_base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(reg_base))
 		return PTR_ERR(reg_base);
 
@@ -273,7 +267,7 @@ unregister:
 	return ret;
 }
 
-static int exynos_audss_clk_remove(struct platform_device *pdev)
+static void exynos_audss_clk_remove(struct platform_device *pdev)
 {
 	of_clk_del_provider(pdev->dev.of_node);
 
@@ -282,8 +276,6 @@ static int exynos_audss_clk_remove(struct platform_device *pdev)
 
 	if (!IS_ERR(epll))
 		clk_disable_unprepare(epll);
-
-	return 0;
 }
 
 static const struct dev_pm_ops exynos_audss_clk_pm_ops = {

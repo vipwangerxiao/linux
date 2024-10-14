@@ -1,17 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * cx2341x - generic code for cx23415/6/8 based devices
  *
  * Copyright (C) 2006 Hans Verkuil <hverkuil@xs4all.nl>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 
@@ -175,7 +166,7 @@ static void cx2341x_ctrl_fill(u32 id, const char **name, enum v4l2_ctrl_type *ty
 
 /* Must be sorted from low to high control ID! */
 const u32 cx2341x_mpeg_ctrls[] = {
-	V4L2_CID_MPEG_CLASS,
+	V4L2_CID_CODEC_CLASS,
 	V4L2_CID_MPEG_STREAM_TYPE,
 	V4L2_CID_MPEG_STREAM_VBI_FMT,
 	V4L2_CID_MPEG_AUDIO_SAMPLING_FREQ,
@@ -583,7 +574,7 @@ int cx2341x_ctrl_query(const struct cx2341x_mpeg_params *params,
 	int err;
 
 	switch (qctrl->id) {
-	case V4L2_CID_MPEG_CLASS:
+	case V4L2_CID_CODEC_CLASS:
 		return v4l2_ctrl_query_fill(qctrl, 0, 0, 0, 0);
 	case V4L2_CID_MPEG_STREAM_TYPE:
 		return v4l2_ctrl_query_fill(qctrl,

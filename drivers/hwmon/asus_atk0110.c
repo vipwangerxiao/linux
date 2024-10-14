@@ -1,7 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2007-2009 Luca Tettamanti <kronos.it@gmail.com>
  *
- * This file is released under the GPLv2
  * See COPYING in the top level directory of the kernel tree.
  */
 
@@ -187,7 +187,7 @@ struct atk_acpi_input_buf {
 };
 
 static int atk_add(struct acpi_device *device);
-static int atk_remove(struct acpi_device *device);
+static void atk_remove(struct acpi_device *device);
 static void atk_print_sensor(struct atk_data *data, union acpi_object *obj);
 static int atk_read_value(struct atk_sensor_data *sensor, u64 *value);
 
@@ -783,39 +783,21 @@ static const struct file_operations atk_debugfs_ggrp_fops = {
 	.read		= atk_debugfs_ggrp_read,
 	.open		= atk_debugfs_ggrp_open,
 	.release	= atk_debugfs_ggrp_release,
-	.llseek		= no_llseek,
 };
 
 static void atk_debugfs_init(struct atk_data *data)
 {
 	struct dentry *d;
-	struct dentry *f;
 
 	data->debugfs.id = 0;
 
 	d = debugfs_create_dir("asus_atk0110", NULL);
-	if (!d || IS_ERR(d))
-		return;
 
-	f = debugfs_create_x32("id", 0600, d, &data->debugfs.id);
-	if (!f || IS_ERR(f))
-		goto cleanup;
-
-	f = debugfs_create_file_unsafe("gitm", 0400, d, data,
-				       &atk_debugfs_gitm);
-	if (!f || IS_ERR(f))
-		goto cleanup;
-
-	f = debugfs_create_file("ggrp", 0400, d, data,
-				&atk_debugfs_ggrp_fops);
-	if (!f || IS_ERR(f))
-		goto cleanup;
+	debugfs_create_x32("id", 0600, d, &data->debugfs.id);
+	debugfs_create_file_unsafe("gitm", 0400, d, data, &atk_debugfs_gitm);
+	debugfs_create_file("ggrp", 0400, d, data, &atk_debugfs_ggrp_fops);
 
 	data->debugfs.root = d;
-
-	return;
-cleanup:
-	debugfs_remove_recursive(d);
 }
 
 static void atk_debugfs_cleanup(struct atk_data *data)
@@ -1361,7 +1343,7 @@ out:
 	return err;
 }
 
-static int atk_remove(struct acpi_device *device)
+static void atk_remove(struct acpi_device *device)
 {
 	struct atk_data *data = device->driver_data;
 	dev_dbg(&device->dev, "removing...\n");
@@ -1376,8 +1358,6 @@ static int atk_remove(struct acpi_device *device)
 		if (atk_ec_ctl(data, 0))
 			dev_err(&device->dev, "Failed to disable EC\n");
 	}
-
-	return 0;
 }
 
 static int __init atk0110_init(void)
@@ -1408,4 +1388,5 @@ static void __exit atk0110_exit(void)
 module_init(atk0110_init);
 module_exit(atk0110_exit);
 
+MODULE_DESCRIPTION("ASUS ATK0110 driver");
 MODULE_LICENSE("GPL");

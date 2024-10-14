@@ -22,6 +22,10 @@ int nfp_nsp_write_flash(struct nfp_nsp *state, const struct firmware *fw);
 int nfp_nsp_mac_reinit(struct nfp_nsp *state);
 int nfp_nsp_load_stored_fw(struct nfp_nsp *state);
 int nfp_nsp_hwinfo_lookup(struct nfp_nsp *state, void *buf, unsigned int size);
+int nfp_nsp_hwinfo_lookup_optional(struct nfp_nsp *state, void *buf,
+				   unsigned int size, const char *default_val);
+int nfp_nsp_hwinfo_set(struct nfp_nsp *state, void *buf, unsigned int size);
+int nfp_nsp_fw_loaded(struct nfp_nsp *state);
 int nfp_nsp_read_module_eeprom(struct nfp_nsp *state, int eth_index,
 			       unsigned int offset, void *data,
 			       unsigned int len, unsigned int *read_len);
@@ -41,6 +45,16 @@ static inline bool nfp_nsp_has_hwinfo_lookup(struct nfp_nsp *state)
 	return nfp_nsp_get_abi_ver_minor(state) > 24;
 }
 
+static inline bool nfp_nsp_has_hwinfo_set(struct nfp_nsp *state)
+{
+	return nfp_nsp_get_abi_ver_minor(state) > 25;
+}
+
+static inline bool nfp_nsp_has_fw_loaded(struct nfp_nsp *state)
+{
+	return nfp_nsp_get_abi_ver_minor(state) > 25;
+}
+
 static inline bool nfp_nsp_has_versions(struct nfp_nsp *state)
 {
 	return nfp_nsp_get_abi_ver_minor(state) > 27;
@@ -49,6 +63,11 @@ static inline bool nfp_nsp_has_versions(struct nfp_nsp *state)
 static inline bool nfp_nsp_has_read_module_eeprom(struct nfp_nsp *state)
 {
 	return nfp_nsp_get_abi_ver_minor(state) > 28;
+}
+
+static inline bool nfp_nsp_has_read_media(struct nfp_nsp *state)
+{
+	return nfp_nsp_get_abi_ver_minor(state) > 33;
 }
 
 enum nfp_eth_interface {
@@ -83,10 +102,69 @@ enum nfp_eth_fec {
 	NFP_FEC_DISABLED_BIT,
 };
 
+/* link modes about RJ45 haven't been used, so there's no mapping to them */
+enum nfp_ethtool_link_mode_list {
+	NFP_MEDIA_W0_RJ45_10M,
+	NFP_MEDIA_W0_RJ45_10M_HD,
+	NFP_MEDIA_W0_RJ45_100M,
+	NFP_MEDIA_W0_RJ45_100M_HD,
+	NFP_MEDIA_W0_RJ45_1G,
+	NFP_MEDIA_W0_RJ45_2P5G,
+	NFP_MEDIA_W0_RJ45_5G,
+	NFP_MEDIA_W0_RJ45_10G,
+	NFP_MEDIA_1000BASE_CX,
+	NFP_MEDIA_1000BASE_KX,
+	NFP_MEDIA_10GBASE_KX4,
+	NFP_MEDIA_10GBASE_KR,
+	NFP_MEDIA_10GBASE_CX4,
+	NFP_MEDIA_10GBASE_CR,
+	NFP_MEDIA_10GBASE_SR,
+	NFP_MEDIA_10GBASE_ER,
+	NFP_MEDIA_25GBASE_KR,
+	NFP_MEDIA_25GBASE_KR_S,
+	NFP_MEDIA_25GBASE_CR,
+	NFP_MEDIA_25GBASE_CR_S,
+	NFP_MEDIA_25GBASE_SR,
+	NFP_MEDIA_40GBASE_CR4,
+	NFP_MEDIA_40GBASE_KR4,
+	NFP_MEDIA_40GBASE_SR4,
+	NFP_MEDIA_40GBASE_LR4,
+	NFP_MEDIA_50GBASE_KR,
+	NFP_MEDIA_50GBASE_SR,
+	NFP_MEDIA_50GBASE_CR,
+	NFP_MEDIA_50GBASE_LR,
+	NFP_MEDIA_50GBASE_ER,
+	NFP_MEDIA_50GBASE_FR,
+	NFP_MEDIA_100GBASE_KR4,
+	NFP_MEDIA_100GBASE_SR4,
+	NFP_MEDIA_100GBASE_CR4,
+	NFP_MEDIA_100GBASE_KP4,
+	NFP_MEDIA_100GBASE_CR10,
+	NFP_MEDIA_10GBASE_LR,
+	NFP_MEDIA_25GBASE_LR,
+	NFP_MEDIA_25GBASE_ER,
+	NFP_MEDIA_LINK_MODES_NUMBER
+};
+
 #define NFP_FEC_AUTO		BIT(NFP_FEC_AUTO_BIT)
 #define NFP_FEC_BASER		BIT(NFP_FEC_BASER_BIT)
 #define NFP_FEC_REED_SOLOMON	BIT(NFP_FEC_REED_SOLOMON_BIT)
 #define NFP_FEC_DISABLED	BIT(NFP_FEC_DISABLED_BIT)
+
+/* Defines the valid values of the 'abi_drv_reset' hwinfo key */
+#define NFP_NSP_DRV_RESET_DISK			0
+#define NFP_NSP_DRV_RESET_ALWAYS		1
+#define NFP_NSP_DRV_RESET_NEVER			2
+#define NFP_NSP_DRV_RESET_DEFAULT		"0"
+
+/* Defines the valid values of the 'app_fw_from_flash' hwinfo key */
+#define NFP_NSP_APP_FW_LOAD_DISK		0
+#define NFP_NSP_APP_FW_LOAD_FLASH		1
+#define NFP_NSP_APP_FW_LOAD_PREF		2
+#define NFP_NSP_APP_FW_LOAD_DEFAULT		"2"
+
+/* Define the default value for the 'abi_drv_load_ifc' key */
+#define NFP_NSP_DRV_LOAD_IFC_DEFAULT		"0x10ff"
 
 /**
  * struct nfp_eth_table - ETH table information
@@ -103,6 +181,7 @@ enum nfp_eth_fec {
  * @ports.interface:	interface (module) plugged in
  * @ports.media:	media type of the @interface
  * @ports.fec:		forward error correction mode
+ * @ports.act_fec:	active forward error correction mode
  * @ports.aneg:		auto negotiation mode
  * @ports.mac_addr:	interface MAC address
  * @ports.label_port:	port id
@@ -110,6 +189,8 @@ enum nfp_eth_fec {
  * @ports.enabled:	is enabled?
  * @ports.tx_enabled:	is TX enabled?
  * @ports.rx_enabled:	is RX enabled?
+ * @ports.rx_pause:	Switch of RX pause frame
+ * @ports.tx_pause:	Switch of Tx pause frame
  * @ports.override_changed: is media reconfig pending?
  *
  * @ports.port_type:	one of %PORT_* defines for ethtool
@@ -117,6 +198,9 @@ enum nfp_eth_fec {
  *			subports)
  * @ports.is_split:	is interface part of a split port
  * @ports.fec_modes_supported:	bitmap of FEC modes supported
+ *
+ * @ports.link_modes_supp:	bitmap of link modes supported
+ * @ports.link_modes_ad:	bitmap of link modes advertised
  */
 struct nfp_eth_table {
 	unsigned int count;
@@ -133,6 +217,7 @@ struct nfp_eth_table {
 		enum nfp_eth_media media;
 
 		enum nfp_eth_fec fec;
+		enum nfp_eth_fec act_fec;
 		enum nfp_eth_aneg aneg;
 
 		u8 mac_addr[ETH_ALEN];
@@ -143,6 +228,9 @@ struct nfp_eth_table {
 		bool enabled;
 		bool tx_enabled;
 		bool rx_enabled;
+		bool supp_aneg;
+		bool rx_pause;
+		bool tx_pause;
 
 		bool override_changed;
 
@@ -154,7 +242,10 @@ struct nfp_eth_table {
 		bool is_split;
 
 		unsigned int fec_modes_supported;
-	} ports[0];
+
+		u64 link_modes_supp[2];
+		u64 link_modes_ad[2];
+	} ports[] __counted_by(count);
 };
 
 struct nfp_eth_table *nfp_eth_read_ports(struct nfp_cpp *cpp);
@@ -166,6 +257,10 @@ int nfp_eth_set_configured(struct nfp_cpp *cpp, unsigned int idx,
 			   bool configed);
 int
 nfp_eth_set_fec(struct nfp_cpp *cpp, unsigned int idx, enum nfp_eth_fec mode);
+
+int nfp_eth_set_idmode(struct nfp_cpp *cpp, unsigned int idx, bool state);
+int nfp_eth_set_pauseparam(struct nfp_cpp *cpp, unsigned int idx,
+			   unsigned int tx_pause, unsigned int rx_pause);
 
 static inline bool nfp_eth_can_support_fec(struct nfp_eth_table_port *eth_port)
 {
@@ -221,6 +316,15 @@ enum nfp_nsp_sensor_id {
 
 int nfp_hwmon_read_sensor(struct nfp_cpp *cpp, enum nfp_nsp_sensor_id id,
 			  long *val);
+
+struct nfp_eth_media_buf {
+	u8 eth_index;
+	u8 reserved[7];
+	__le64 supported_modes[2];
+	__le64 advertised_modes[2];
+};
+
+int nfp_nsp_read_media(struct nfp_nsp *state, void *buf, unsigned int size);
 
 #define NFP_NSP_VERSION_BUFSZ	1024 /* reasonable size, not in the ABI */
 

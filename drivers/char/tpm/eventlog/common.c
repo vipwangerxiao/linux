@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2005, 2012 IBM Corporation
  *
@@ -10,12 +11,6 @@
  *	Nayna Jain <nayna@linux.vnet.ibm.com>
  *
  * Access to the event log created by a system's firmware / BIOS
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
- *
  */
 
 #include <linux/seq_file.h>
@@ -41,7 +36,7 @@ static int tpm_bios_measurements_open(struct inode *inode,
 		inode_unlock(inode);
 		return -ENODEV;
 	}
-	chip_seqops = (struct tpm_chip_seqops *)inode->i_private;
+	chip_seqops = inode->i_private;
 	seqops = chip_seqops->seqops;
 	chip = chip_seqops->chip;
 	get_device(&chip->dev);
@@ -52,6 +47,8 @@ static int tpm_bios_measurements_open(struct inode *inode,
 	if (!err) {
 		seq = file->private_data;
 		seq->private = chip;
+	} else {
+		put_device(&chip->dev);
 	}
 
 	return err;
@@ -60,8 +57,8 @@ static int tpm_bios_measurements_open(struct inode *inode,
 static int tpm_bios_measurements_release(struct inode *inode,
 					 struct file *file)
 {
-	struct seq_file *seq = (struct seq_file *)file->private_data;
-	struct tpm_chip *chip = (struct tpm_chip *)seq->private;
+	struct seq_file *seq = file->private_data;
+	struct tpm_chip *chip = seq->private;
 
 	put_device(&chip->dev);
 
@@ -104,20 +101,20 @@ static int tpm_read_log(struct tpm_chip *chip)
  *
  * If an event log is found then the securityfs files are setup to
  * export it to userspace, otherwise nothing is done.
- *
- * Returns -ENODEV if the firmware has no event log or securityfs is not
- * supported.
  */
-int tpm_bios_log_setup(struct tpm_chip *chip)
+void tpm_bios_log_setup(struct tpm_chip *chip)
 {
 	const char *name = dev_name(&chip->dev);
 	unsigned int cnt;
 	int log_version;
 	int rc = 0;
 
+	if (chip->flags & TPM_CHIP_FLAG_VIRTUAL)
+		return;
+
 	rc = tpm_read_log(chip);
 	if (rc < 0)
-		return rc;
+		return;
 	log_version = rc;
 
 	cnt = 0;
@@ -163,13 +160,12 @@ int tpm_bios_log_setup(struct tpm_chip *chip)
 		cnt++;
 	}
 
-	return 0;
+	return;
 
 err:
-	rc = PTR_ERR(chip->bios_dir[cnt]);
 	chip->bios_dir[cnt] = NULL;
 	tpm_bios_log_teardown(chip);
-	return rc;
+	return;
 }
 
 void tpm_bios_log_teardown(struct tpm_chip *chip)

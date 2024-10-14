@@ -1,16 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2015 Vladimir Zapolskiy <vz@mleia.com>
- *
- * The code contained herein is licensed under the GNU General Public
- * License. You may obtain a copy of the GNU General Public License
- * Version 2 or later at the following locations:
- *
- * http://www.opensource.org/licenses/gpl-license.html
- * http://www.gnu.org/copyleft/gpl.html
  */
 
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
+#include <linux/io.h>
 #include <linux/of_address.h>
 #include <linux/regmap.h>
 
@@ -66,7 +61,7 @@
 #define LPC32XX_USB_CLK_CTRL		0xF4
 #define LPC32XX_USB_CLK_STS		0xF8
 
-static struct regmap_config lpc32xx_scb_regmap_config = {
+static const struct regmap_config lpc32xx_scb_regmap_config = {
 	.name = "scb",
 	.reg_bits = 32,
 	.val_bits = 32,

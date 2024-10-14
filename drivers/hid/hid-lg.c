@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  HID driver for some logitech "special" devices
  *
@@ -10,10 +11,6 @@
  */
 
 /*
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the Free
- * Software Foundation; either version 2 of the License, or (at your option)
- * any later version.
  */
 
 #include <linux/device.h>
@@ -61,7 +58,7 @@
  * These descriptors remove the combined Y axis and instead report
  * separate throttle (Y) and brake (RZ).
  */
-static __u8 df_rdesc_fixed[] = {
+static const __u8 df_rdesc_fixed[] = {
 0x05, 0x01,         /*  Usage Page (Desktop),                   */
 0x09, 0x04,         /*  Usage (Joystick),                       */
 0xA1, 0x01,         /*  Collection (Application),               */
@@ -127,7 +124,7 @@ static __u8 df_rdesc_fixed[] = {
 0xC0                /*  End Collection                          */
 };
 
-static __u8 dfp_rdesc_fixed[] = {
+static const __u8 dfp_rdesc_fixed[] = {
 0x05, 0x01,         /*  Usage Page (Desktop),                   */
 0x09, 0x04,         /*  Usage (Joystick),                       */
 0xA1, 0x01,         /*  Collection (Application),               */
@@ -175,7 +172,7 @@ static __u8 dfp_rdesc_fixed[] = {
 0xC0                /*  End Collection                          */
 };
 
-static __u8 fv_rdesc_fixed[] = {
+static const __u8 fv_rdesc_fixed[] = {
 0x05, 0x01,         /*  Usage Page (Desktop),                   */
 0x09, 0x04,         /*  Usage (Joystick),                       */
 0xA1, 0x01,         /*  Collection (Application),               */
@@ -242,7 +239,7 @@ static __u8 fv_rdesc_fixed[] = {
 0xC0                /*  End Collection                          */
 };
 
-static __u8 momo_rdesc_fixed[] = {
+static const __u8 momo_rdesc_fixed[] = {
 0x05, 0x01,         /*  Usage Page (Desktop),               */
 0x09, 0x04,         /*  Usage (Joystick),                   */
 0xA1, 0x01,         /*  Collection (Application),           */
@@ -288,7 +285,7 @@ static __u8 momo_rdesc_fixed[] = {
 0xC0                /*  End Collection                      */
 };
 
-static __u8 momo2_rdesc_fixed[] = {
+static const __u8 momo2_rdesc_fixed[] = {
 0x05, 0x01,         /*  Usage Page (Desktop),               */
 0x09, 0x04,         /*  Usage (Joystick),                   */
 0xA1, 0x01,         /*  Collection (Application),           */
@@ -336,7 +333,7 @@ static __u8 momo2_rdesc_fixed[] = {
 0xC0                /*  End Collection                      */
 };
 
-static __u8 ffg_rdesc_fixed[] = {
+static const __u8 ffg_rdesc_fixed[] = {
 0x05, 0x01,         /*  Usage Page (Desktop),               */
 0x09, 0x04,         /*  Usage (Joystik),                    */
 0xA1, 0x01,         /*  Collection (Application),           */
@@ -382,7 +379,7 @@ static __u8 ffg_rdesc_fixed[] = {
 0xC0                /*  End Collection                      */
 };
 
-static __u8 fg_rdesc_fixed[] = {
+static const __u8 fg_rdesc_fixed[] = {
 0x05, 0x01,         /*  Usage Page (Desktop),               */
 0x09, 0x04,         /*  Usage (Joystik),                    */
 0xA1, 0x01,         /*  Collection (Application),           */
@@ -430,7 +427,7 @@ static __u8 fg_rdesc_fixed[] = {
  * above the logical maximum described in descriptor. This extends
  * the original value of 0x28c of logical maximum to 0x104d
  */
-static __u8 *lg_report_fixup(struct hid_device *hdev, __u8 *rdesc,
+static const __u8 *lg_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 		unsigned int *rsize)
 {
 	struct lg_drv_data *drv_data = hid_get_drvdata(hdev);
@@ -456,8 +453,8 @@ static __u8 *lg_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 		if (*rsize == FG_RDESC_ORIG_SIZE) {
 			hid_info(hdev,
 				"fixing up Logitech Wingman Formula GP report descriptor\n");
-			rdesc = fg_rdesc_fixed;
 			*rsize = sizeof(fg_rdesc_fixed);
+			return fg_rdesc_fixed;
 		} else {
 			hid_info(hdev,
 				"rdesc size test failed for formula gp\n");
@@ -469,8 +466,8 @@ static __u8 *lg_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 		if (*rsize == FFG_RDESC_ORIG_SIZE) {
 			hid_info(hdev,
 				"fixing up Logitech Wingman Formula Force GP report descriptor\n");
-			rdesc = ffg_rdesc_fixed;
 			*rsize = sizeof(ffg_rdesc_fixed);
+			return ffg_rdesc_fixed;
 		}
 		break;
 
@@ -479,8 +476,8 @@ static __u8 *lg_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 		if (*rsize == DF_RDESC_ORIG_SIZE) {
 			hid_info(hdev,
 				"fixing up Logitech Driving Force report descriptor\n");
-			rdesc = df_rdesc_fixed;
 			*rsize = sizeof(df_rdesc_fixed);
+			return df_rdesc_fixed;
 		}
 		break;
 
@@ -488,8 +485,8 @@ static __u8 *lg_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 		if (*rsize == MOMO_RDESC_ORIG_SIZE) {
 			hid_info(hdev,
 				"fixing up Logitech Momo Force (Red) report descriptor\n");
-			rdesc = momo_rdesc_fixed;
 			*rsize = sizeof(momo_rdesc_fixed);
+			return momo_rdesc_fixed;
 		}
 		break;
 
@@ -497,8 +494,8 @@ static __u8 *lg_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 		if (*rsize == MOMO2_RDESC_ORIG_SIZE) {
 			hid_info(hdev,
 				"fixing up Logitech Momo Racing Force (Black) report descriptor\n");
-			rdesc = momo2_rdesc_fixed;
 			*rsize = sizeof(momo2_rdesc_fixed);
+			return momo2_rdesc_fixed;
 		}
 		break;
 
@@ -506,8 +503,8 @@ static __u8 *lg_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 		if (*rsize == FV_RDESC_ORIG_SIZE) {
 			hid_info(hdev,
 				"fixing up Logitech Formula Vibration report descriptor\n");
-			rdesc = fv_rdesc_fixed;
 			*rsize = sizeof(fv_rdesc_fixed);
+			return fv_rdesc_fixed;
 		}
 		break;
 
@@ -515,8 +512,8 @@ static __u8 *lg_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 		if (*rsize == DFP_RDESC_ORIG_SIZE) {
 			hid_info(hdev,
 				"fixing up Logitech Driving Force Pro report descriptor\n");
-			rdesc = dfp_rdesc_fixed;
 			*rsize = sizeof(dfp_rdesc_fixed);
+			return dfp_rdesc_fixed;
 		}
 		break;
 
@@ -567,22 +564,6 @@ static int lg_ultrax_remote_mapping(struct hid_input *hi,
 
 	default:
 		return 0;
-	}
-	return 1;
-}
-
-static int lg_dinovo_mapping(struct hid_input *hi, struct hid_usage *usage,
-		unsigned long **bit, int *max)
-{
-	if ((usage->hid & HID_USAGE_PAGE) != HID_UP_LOGIVENDOR)
-		return 0;
-
-	switch (usage->hid & HID_USAGE) {
-
-	case 0x00d: lg_map_key_clear(KEY_MEDIA);	break;
-	default:
-		return 0;
-
 	}
 	return 1;
 }
@@ -669,10 +650,6 @@ static int lg_input_mapping(struct hid_device *hdev, struct hid_input *hi,
 
 	if (hdev->product == USB_DEVICE_ID_LOGITECH_RECEIVER &&
 			lg_ultrax_remote_mapping(hi, usage, bit, max))
-		return 1;
-
-	if (hdev->product == USB_DEVICE_ID_DINOVO_MINI &&
-			lg_dinovo_mapping(hi, usage, bit, max))
 		return 1;
 
 	if ((drv_data->quirks & LG_WIRELESS) && lg_wireless_mapping(hi, usage, bit, max))
@@ -772,11 +749,17 @@ static int lg_raw_event(struct hid_device *hdev, struct hid_report *report,
 
 static int lg_probe(struct hid_device *hdev, const struct hid_device_id *id)
 {
-	struct usb_interface *iface = to_usb_interface(hdev->dev.parent);
-	__u8 iface_num = iface->cur_altsetting->desc.bInterfaceNumber;
+	struct usb_interface *iface;
+	__u8 iface_num;
 	unsigned int connect_mask = HID_CONNECT_DEFAULT;
 	struct lg_drv_data *drv_data;
 	int ret;
+
+	if (!hid_is_usb(hdev))
+		return -EINVAL;
+
+	iface = to_usb_interface(hdev->dev.parent);
+	iface_num = iface->cur_altsetting->desc.bInterfaceNumber;
 
 	/* G29 only work with the 1st interface */
 	if ((hdev->product == USB_DEVICE_ID_LOGITECH_G29_WHEEL) &&
@@ -821,7 +804,7 @@ static int lg_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 		if (!buf) {
 			ret = -ENOMEM;
-			goto err_free;
+			goto err_stop;
 		}
 
 		ret = hid_hw_raw_request(hdev, buf[0], buf, sizeof(cbuf),
@@ -853,9 +836,12 @@ static int lg_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		ret = lg4ff_init(hdev);
 
 	if (ret)
-		goto err_free;
+		goto err_stop;
 
 	return 0;
+
+err_stop:
+	hid_hw_stop(hdev);
 err_free:
 	kfree(drv_data);
 	return ret;
@@ -866,14 +852,11 @@ static void lg_remove(struct hid_device *hdev)
 	struct lg_drv_data *drv_data = hid_get_drvdata(hdev);
 	if (drv_data->quirks & LG_FF4)
 		lg4ff_deinit(hdev);
-	else
-		hid_hw_stop(hdev);
+	hid_hw_stop(hdev);
 	kfree(drv_data);
 }
 
 static const struct hid_device_id lg_devices[] = {
-	{ HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_MX3000_RECEIVER),
-		.driver_data = LG_RDESC | LG_WIRELESS },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_S510_RECEIVER),
 		.driver_data = LG_RDESC | LG_WIRELESS },
 
@@ -881,10 +864,6 @@ static const struct hid_device_id lg_devices[] = {
 		.driver_data = LG_BAD_RELATIVE_KEYS },
 
 	{ HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_DINOVO_DESKTOP),
-		.driver_data = LG_DUPLICATE_USAGES },
-	{ HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_DINOVO_EDGE),
-		.driver_data = LG_DUPLICATE_USAGES },
-	{ HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_DINOVO_MINI),
 		.driver_data = LG_DUPLICATE_USAGES },
 
 	{ HID_USB_DEVICE(USB_VENDOR_ID_LOGITECH, USB_DEVICE_ID_LOGITECH_ELITE_KBD),
@@ -963,4 +942,5 @@ module_param_named(lg4ff_no_autoswitch, lg4ff_no_autoswitch, int, S_IRUGO);
 MODULE_PARM_DESC(lg4ff_no_autoswitch, "Do not switch multimode wheels to their native mode automatically");
 #endif
 
+MODULE_DESCRIPTION("HID driver for some logitech \"special\" devices");
 MODULE_LICENSE("GPL");

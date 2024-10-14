@@ -1,22 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * ISP1704 USB Charger Detection driver
  *
  * Copyright (C) 2010 Nokia Corporation
- * Copyright (C) 2012 - 2013 Pali Rohár <pali.rohar@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+ * Copyright (C) 2012 - 2013 Pali Rohár <pali@kernel.org>
  */
 
 #include <linux/kernel.h>
@@ -355,7 +342,7 @@ static inline int isp1704_test_ulpi(struct isp1704_charger *isp)
 	int vendor;
 	int product;
 	int i;
-	int ret = -ENODEV;
+	int ret;
 
 	/* Test ULPI interface */
 	ret = isp1704_write(isp, ULPI_SCRATCH, 0xaa);
@@ -490,15 +477,13 @@ fail0:
 	return ret;
 }
 
-static int isp1704_charger_remove(struct platform_device *pdev)
+static void isp1704_charger_remove(struct platform_device *pdev)
 {
 	struct isp1704_charger *isp = platform_get_drvdata(pdev);
 
 	usb_unregister_notifier(isp->phy, &isp->nb);
 	power_supply_unregister(isp->psy);
 	isp1704_charger_set_power(isp, 0);
-
-	return 0;
 }
 
 #ifdef CONFIG_OF
@@ -516,7 +501,7 @@ static struct platform_driver isp1704_charger_driver = {
 		.of_match_table = of_match_ptr(omap_isp1704_of_match),
 	},
 	.probe = isp1704_charger_probe,
-	.remove = isp1704_charger_remove,
+	.remove_new = isp1704_charger_remove,
 };
 
 module_platform_driver(isp1704_charger_driver);

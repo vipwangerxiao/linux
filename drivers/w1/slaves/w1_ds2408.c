@@ -1,10 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *	w1_ds2408.c - w1 family 29 (DS2408) driver
  *
  * Copyright (c) 2010 Jean-Francois Dagenais <dagenaisj@sonatest.com>
- *
- * This source code is licensed under the GNU General Public License,
- * Version 2. See the file COPYING for more details.
  */
 
 #include <linux/kernel.h>
@@ -37,12 +35,12 @@
 
 #define W1_F29_SUCCESS_CONFIRM_BYTE        0xAA
 
-static int _read_reg(struct w1_slave *sl, u8 address, unsigned char* buf)
+static int _read_reg(struct w1_slave *sl, u8 address, unsigned char *buf)
 {
 	u8 wrbuf[3];
-	dev_dbg(&sl->dev,
-			"Reading with slave: %p, reg addr: %0#4x, buff addr: %p",
-			sl, (unsigned int)address, buf);
+
+	dev_dbg(&sl->dev, "Reading with slave: %p, reg addr: %0#4x, buff addr: %p",
+		sl, (unsigned int)address, buf);
 
 	if (!buf)
 		return -EINVAL;
@@ -138,7 +136,7 @@ static ssize_t status_control_read(struct file *filp, struct kobject *kobj,
 		W1_F29_REG_CONTROL_AND_STATUS, buf);
 }
 
-#ifdef fCONFIG_W1_SLAVE_DS2408_READBACK
+#ifdef CONFIG_W1_SLAVE_DS2408_READBACK
 static bool optional_read_back_valid(struct w1_slave *sl, u8 expected)
 {
 	u8 w1_buf[3];
@@ -208,7 +206,7 @@ out:
 }
 
 
-/**
+/*
  * Writing to the activity file resets the activity latches.
  */
 static ssize_t activity_write(struct file *filp, struct kobject *kobj,
@@ -294,7 +292,7 @@ static int w1_f29_disable_test_mode(struct w1_slave *sl)
 {
 	int res;
 	u8 magic[10] = {0x96, };
-	u64 rn = le64_to_cpu(*((u64*)&sl->reg_num));
+	u64 rn = le64_to_cpu(*((u64 *)&sl->reg_num));
 
 	memcpy(&magic[1], &rn, 8);
 	magic[9] = 0x3C;
@@ -338,7 +336,7 @@ static const struct attribute_group *w1_f29_groups[] = {
 	NULL,
 };
 
-static struct w1_family_ops w1_f29_fops = {
+static const struct w1_family_ops w1_f29_fops = {
 	.add_slave      = w1_f29_disable_test_mode,
 	.groups		= w1_f29_groups,
 };

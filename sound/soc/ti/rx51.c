@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * rx51.c  --  SoC audio for Nokia RX-51
  *
@@ -6,25 +7,9 @@
  * Contact: Peter Ujfalusi <peter.ujfalusi@ti.com>
  *          Eduardo Valentin <eduardo.valentin@nokia.com>
  *          Jarkko Nikula <jarkko.nikula@bitmer.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
  */
 
 #include <linux/delay.h>
-#include <linux/gpio.h>
 #include <linux/platform_device.h>
 #include <linux/gpio/consumer.h>
 #include <linux/module.h>
@@ -47,7 +32,6 @@ enum {
 
 struct rx51_audio_pdata {
 	struct gpio_desc *tvout_selection_gpio;
-	struct gpio_desc *jack_detection_gpio;
 	struct gpio_desc *eci_sw_gpio;
 	struct gpio_desc *speaker_amp_gpio;
 };
@@ -69,6 +53,7 @@ static void rx51_ext_control(struct snd_soc_dapm_context *dapm)
 		break;
 	case RX51_JACK_HS:
 		hs = 1;
+		fallthrough;
 	case RX51_JACK_HP:
 		hp = 1;
 		break;
@@ -103,7 +88,7 @@ static void rx51_ext_control(struct snd_soc_dapm_context *dapm)
 static int rx51_startup(struct snd_pcm_substream *substream)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 	struct snd_soc_card *card = rtd->card;
 
 	snd_pcm_hw_constraint_single(runtime, SNDRV_PCM_HW_PARAM_CHANNELS, 2);
@@ -115,8 +100,8 @@ static int rx51_startup(struct snd_pcm_substream *substream)
 static int rx51_hw_params(struct snd_pcm_substream *substream,
 	struct snd_pcm_hw_params *params)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *codec_dai = rtd->codec_dai;
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, 0);
 
 	/* Set the codec system clock for DAC and ADC */
 	return snd_soc_dai_set_sysclk(codec_dai, 0, 19200000,
@@ -211,7 +196,7 @@ static struct snd_soc_jack rx51_av_jack;
 
 static struct snd_soc_jack_gpio rx51_av_jack_gpios[] = {
 	{
-		.name = "avdet-gpio",
+		.name = "jack-detection",
 		.report = SND_JACK_HEADSET,
 		.invert = 1,
 		.debounce_time = 200,
@@ -276,7 +261,6 @@ static const struct snd_kcontrol_new aic34_rx51_controls[] = {
 static int rx51_aic34_init(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_soc_card *card = rtd->card;
-	struct rx51_audio_pdata *pdata = snd_soc_card_get_drvdata(card);
 	int err;
 
 	snd_soc_limit_volume(card, "TPA6130A2 Headphone Playback Volume", 42);
@@ -290,15 +274,15 @@ static int rx51_aic34_init(struct snd_soc_pcm_runtime *rtd)
 	/* AV jack detection */
 	err = snd_soc_card_jack_new(rtd->card, "AV Jack",
 				    SND_JACK_HEADSET | SND_JACK_VIDEOOUT,
-				    &rx51_av_jack, NULL, 0);
+				    &rx51_av_jack);
 	if (err) {
 		dev_err(card->dev, "Failed to add AV Jack\n");
 		return err;
 	}
 
-	/* prepare gpio for snd_soc_jack_add_gpios */
-	rx51_av_jack_gpios[0].gpio = desc_to_gpio(pdata->jack_detection_gpio);
-	devm_gpiod_put(card->dev, pdata->jack_detection_gpio);
+	rx51_av_jack_gpios[0].gpiod_dev = card->dev;
+	/* Name is assigned in the struct */
+	rx51_av_jack_gpios[0].idx = 0;
 
 	err = snd_soc_jack_add_gpios(&rx51_av_jack,
 				     ARRAY_SIZE(rx51_av_jack_gpios),
@@ -312,39 +296,40 @@ static int rx51_aic34_init(struct snd_soc_pcm_runtime *rtd)
 }
 
 /* Digital audio interface glue - connects codec <--> CPU */
+SND_SOC_DAILINK_DEFS(aic34,
+	DAILINK_COMP_ARRAY(COMP_CPU("omap-mcbsp.2")),
+	DAILINK_COMP_ARRAY(COMP_CODEC("tlv320aic3x-codec.2-0018",
+				      "tlv320aic3x-hifi")),
+	DAILINK_COMP_ARRAY(COMP_PLATFORM("omap-mcbsp.2")));
+
 static struct snd_soc_dai_link rx51_dai[] = {
 	{
 		.name = "TLV320AIC34",
 		.stream_name = "AIC34",
-		.cpu_dai_name = "omap-mcbsp.2",
-		.codec_dai_name = "tlv320aic3x-hifi",
-		.platform_name = "omap-mcbsp.2",
-		.codec_name = "tlv320aic3x-codec.2-0018",
 		.dai_fmt = SND_SOC_DAIFMT_DSP_A | SND_SOC_DAIFMT_IB_NF |
 			   SND_SOC_DAIFMT_CBM_CFM,
 		.init = rx51_aic34_init,
 		.ops = &rx51_ops,
+		SND_SOC_DAILINK_REG(aic34),
 	},
 };
 
 static struct snd_soc_aux_dev rx51_aux_dev[] = {
 	{
-		.name = "TLV320AIC34b",
-		.codec_name = "tlv320aic3x-codec.2-0019",
+		.dlc = COMP_AUX("tlv320aic3x-codec.2-0019"),
 	},
 	{
-		.name = "TPA61320A2",
-		.codec_name = "tpa6130a2.2-0060",
+		.dlc = COMP_AUX("tpa6130a2.2-0060"),
 	},
 };
 
 static struct snd_soc_codec_conf rx51_codec_conf[] = {
 	{
-		.dev_name = "tlv320aic3x-codec.2-0019",
+		.dlc = COMP_CODEC_CONF("tlv320aic3x-codec.2-0019"),
 		.name_prefix = "b",
 	},
 	{
-		.dev_name = "tpa6130a2.2-0060",
+		.dlc = COMP_CODEC_CONF("tpa6130a2.2-0060"),
 		.name_prefix = "TPA6130A2",
 	},
 };
@@ -389,38 +374,38 @@ static int rx51_soc_probe(struct platform_device *pdev)
 			dev_err(&pdev->dev, "McBSP node is not provided\n");
 			return -EINVAL;
 		}
-		rx51_dai[0].cpu_dai_name = NULL;
-		rx51_dai[0].platform_name = NULL;
-		rx51_dai[0].cpu_of_node = dai_node;
-		rx51_dai[0].platform_of_node = dai_node;
+		rx51_dai[0].cpus->dai_name = NULL;
+		rx51_dai[0].platforms->name = NULL;
+		rx51_dai[0].cpus->of_node = dai_node;
+		rx51_dai[0].platforms->of_node = dai_node;
 
 		dai_node = of_parse_phandle(np, "nokia,audio-codec", 0);
 		if (!dai_node) {
 			dev_err(&pdev->dev, "Codec node is not provided\n");
 			return -EINVAL;
 		}
-		rx51_dai[0].codec_name = NULL;
-		rx51_dai[0].codec_of_node = dai_node;
+		rx51_dai[0].codecs->name = NULL;
+		rx51_dai[0].codecs->of_node = dai_node;
 
 		dai_node = of_parse_phandle(np, "nokia,audio-codec", 1);
 		if (!dai_node) {
 			dev_err(&pdev->dev, "Auxiliary Codec node is not provided\n");
 			return -EINVAL;
 		}
-		rx51_aux_dev[0].codec_name = NULL;
-		rx51_aux_dev[0].codec_of_node = dai_node;
-		rx51_codec_conf[0].dev_name = NULL;
-		rx51_codec_conf[0].of_node = dai_node;
+		rx51_aux_dev[0].dlc.name = NULL;
+		rx51_aux_dev[0].dlc.of_node = dai_node;
+		rx51_codec_conf[0].dlc.name = NULL;
+		rx51_codec_conf[0].dlc.of_node = dai_node;
 
 		dai_node = of_parse_phandle(np, "nokia,headphone-amplifier", 0);
 		if (!dai_node) {
 			dev_err(&pdev->dev, "Headphone amplifier node is not provided\n");
 			return -EINVAL;
 		}
-		rx51_aux_dev[1].codec_name = NULL;
-		rx51_aux_dev[1].codec_of_node = dai_node;
-		rx51_codec_conf[1].dev_name = NULL;
-		rx51_codec_conf[1].of_node = dai_node;
+		rx51_aux_dev[1].dlc.name = NULL;
+		rx51_aux_dev[1].dlc.of_node = dai_node;
+		rx51_codec_conf[1].dlc.name = NULL;
+		rx51_codec_conf[1].dlc.of_node = dai_node;
 	}
 
 	pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
@@ -435,14 +420,6 @@ static int rx51_soc_probe(struct platform_device *pdev)
 	if (IS_ERR(pdata->tvout_selection_gpio)) {
 		dev_err(card->dev, "could not get tvout selection gpio\n");
 		return PTR_ERR(pdata->tvout_selection_gpio);
-	}
-
-	pdata->jack_detection_gpio = devm_gpiod_get(card->dev,
-						    "jack-detection",
-						    GPIOD_ASIS);
-	if (IS_ERR(pdata->jack_detection_gpio)) {
-		dev_err(card->dev, "could not get jack detection gpio\n");
-		return PTR_ERR(pdata->jack_detection_gpio);
 	}
 
 	pdata->eci_sw_gpio = devm_gpiod_get(card->dev, "eci-switch",

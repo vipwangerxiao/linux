@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Driver for TI ADC128D818 System Monitor with Temperature Sensor
  *
@@ -6,16 +7,6 @@
  * Derived from lm80.c
  * Copyright (C) 1998, 1999  Frodo Looijaard <frodol@dds.nl>
  *			     and Philip Edelbrock <phil@netroedge.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -67,7 +58,6 @@ static const u8 num_inputs[] = { 7, 8, 4, 6 };
 
 struct adc128_data {
 	struct i2c_client *client;
-	struct regulator *regulator;
 	int vref;		/* Reference voltage in mV */
 	struct mutex update_lock;
 	u8 mode;		/* Operation mode */
@@ -185,7 +175,7 @@ static ssize_t adc128_in_store(struct device *dev,
 
 	mutex_lock(&data->update_lock);
 	/* 10 mV LSB on limit registers */
-	regval = clamp_val(DIV_ROUND_CLOSEST(val, 10), 0, 255);
+	regval = DIV_ROUND_CLOSEST(clamp_val(val, 0, 2550), 10);
 	data->in[index][nr] = regval << 4;
 	reg = index == 1 ? ADC128_REG_IN_MIN(nr) : ADC128_REG_IN_MAX(nr);
 	i2c_smbus_write_byte_data(data->client, reg, regval);
@@ -223,7 +213,7 @@ static ssize_t adc128_temp_store(struct device *dev,
 		return err;
 
 	mutex_lock(&data->update_lock);
-	regval = clamp_val(DIV_ROUND_CLOSEST(val, 1000), -128, 127);
+	regval = DIV_ROUND_CLOSEST(clamp_val(val, -128000, 127000), 1000);
 	data->temp[index] = regval << 1;
 	i2c_smbus_write_byte_data(data->client,
 				  index == 1 ? ADC128_REG_TEMP_MAX
@@ -257,7 +247,7 @@ static ssize_t adc128_alarm_show(struct device *dev,
 static umode_t adc128_is_visible(struct kobject *kobj,
 				 struct attribute *attr, int index)
 {
-	struct device *dev = container_of(kobj, struct device, kobj);
+	struct device *dev = kobj_to_dev(kobj);
 	struct adc128_data *data = dev_get_drvdata(dev);
 
 	if (index < ADC128_ATTR_NUM_VOLT) {
@@ -393,15 +383,16 @@ static int adc128_detect(struct i2c_client *client, struct i2c_board_info *info)
 	if (i2c_smbus_read_byte_data(client, ADC128_REG_BUSY_STATUS) & 0xfc)
 		return -ENODEV;
 
-	strlcpy(info->type, "adc128d818", I2C_NAME_SIZE);
+	strscpy(info->type, "adc128d818", I2C_NAME_SIZE);
 
 	return 0;
 }
 
-static int adc128_init_client(struct adc128_data *data)
+static int adc128_init_client(struct adc128_data *data, bool external_vref)
 {
 	struct i2c_client *client = data->client;
 	int err;
+	u8 regval = 0x0;
 
 	/*
 	 * Reset chip to defaults.
@@ -412,10 +403,17 @@ static int adc128_init_client(struct adc128_data *data)
 		return err;
 
 	/* Set operation mode, if non-default */
-	if (data->mode != 0) {
-		err = i2c_smbus_write_byte_data(client,
-						ADC128_REG_CONFIG_ADV,
-						data->mode << 1);
+	if (data->mode != 0)
+		regval |= data->mode << 1;
+
+	/* If external vref is selected, configure the chip to use it */
+	if (external_vref)
+		regval |= 0x01;
+
+	/* Write advanced configuration register */
+	if (regval != 0x0) {
+		err = i2c_smbus_write_byte_data(client, ADC128_REG_CONFIG_ADV,
+						regval);
 		if (err)
 			return err;
 	}
@@ -425,24 +423,15 @@ static int adc128_init_client(struct adc128_data *data)
 	if (err)
 		return err;
 
-	/* If external vref is selected, configure the chip to use it */
-	if (data->regulator) {
-		err = i2c_smbus_write_byte_data(client,
-						ADC128_REG_CONFIG_ADV, 0x01);
-		if (err)
-			return err;
-	}
-
 	return 0;
 }
 
-static int adc128_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int adc128_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
-	struct regulator *regulator;
 	struct device *hwmon_dev;
 	struct adc128_data *data;
+	bool external_vref;
 	int err, vref;
 
 	data = devm_kzalloc(dev, sizeof(struct adc128_data), GFP_KERNEL);
@@ -450,20 +439,15 @@ static int adc128_probe(struct i2c_client *client,
 		return -ENOMEM;
 
 	/* vref is optional. If specified, is used as chip reference voltage */
-	regulator = devm_regulator_get_optional(dev, "vref");
-	if (!IS_ERR(regulator)) {
-		data->regulator = regulator;
-		err = regulator_enable(regulator);
-		if (err < 0)
-			return err;
-		vref = regulator_get_voltage(regulator);
-		if (vref < 0) {
-			err = vref;
-			goto error;
-		}
-		data->vref = DIV_ROUND_CLOSEST(vref, 1000);
-	} else {
+	vref = devm_regulator_get_enable_read_voltage(dev, "vref");
+	if (vref == -ENODEV) {
+		external_vref = false;
 		data->vref = 2560;	/* 2.56V, in mV */
+	} else if (vref < 0) {
+		return vref;
+	} else {
+		external_vref = true;
+		data->vref = DIV_ROUND_CLOSEST(vref, 1000);
 	}
 
 	/* Operation mode is optional. If unspecified, keep current mode */
@@ -471,13 +455,12 @@ static int adc128_probe(struct i2c_client *client,
 		if (data->mode > 3) {
 			dev_err(dev, "invalid operation mode %d\n",
 				data->mode);
-			err = -EINVAL;
-			goto error;
+			return -EINVAL;
 		}
 	} else {
 		err = i2c_smbus_read_byte_data(client, ADC128_REG_CONFIG_ADV);
 		if (err < 0)
-			goto error;
+			return err;
 		data->mode = (err >> 1) & ADC128_REG_MASK;
 	}
 
@@ -486,37 +469,18 @@ static int adc128_probe(struct i2c_client *client,
 	mutex_init(&data->update_lock);
 
 	/* Initialize the chip */
-	err = adc128_init_client(data);
+	err = adc128_init_client(data, external_vref);
 	if (err < 0)
-		goto error;
+		return err;
 
 	hwmon_dev = devm_hwmon_device_register_with_groups(dev, client->name,
 							   data, adc128_groups);
-	if (IS_ERR(hwmon_dev)) {
-		err = PTR_ERR(hwmon_dev);
-		goto error;
-	}
 
-	return 0;
-
-error:
-	if (data->regulator)
-		regulator_disable(data->regulator);
-	return err;
-}
-
-static int adc128_remove(struct i2c_client *client)
-{
-	struct adc128_data *data = i2c_get_clientdata(client);
-
-	if (data->regulator)
-		regulator_disable(data->regulator);
-
-	return 0;
+	return PTR_ERR_OR_ZERO(hwmon_dev);
 }
 
 static const struct i2c_device_id adc128_id[] = {
-	{ "adc128d818", 0 },
+	{ "adc128d818" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, adc128_id);
@@ -534,7 +498,6 @@ static struct i2c_driver adc128_driver = {
 		.of_match_table = of_match_ptr(adc128_of_match),
 	},
 	.probe		= adc128_probe,
-	.remove		= adc128_remove,
 	.id_table	= adc128_id,
 	.detect		= adc128_detect,
 	.address_list	= normal_i2c,

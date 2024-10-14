@@ -3,36 +3,6 @@
  * hcd.c - DesignWare HS OTG Controller host-mode routines
  *
  * Copyright (C) 2004-2013 Synopsys, Inc.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions, and the following disclaimer,
- *    without modification.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. The names of the above-listed copyright holders may not be used
- *    to endorse or promote products derived from this software without
- *    specific prior written permission.
- *
- * ALTERNATIVELY, this software may be distributed under the terms of the
- * GNU General Public License ("GPL") as published by the Free Software
- * Foundation; either version 2 of the License, or (at your option) any
- * later version.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
- * IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
- * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
- * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 /*
@@ -52,11 +22,10 @@
 
 #include <linux/usb/hcd.h>
 #include <linux/usb/ch11.h>
+#include <linux/usb/of.h>
 
 #include "core.h"
 #include "hcd.h"
-
-static void dwc2_port_resume(struct dwc2_hsotg *hsotg);
 
 /*
  * =========================================================================
@@ -140,19 +109,15 @@ static void dwc2_gusbcfg_init(struct dwc2_hsotg *hsotg)
 
 	switch (hsotg->hw_params.op_mode) {
 	case GHWCFG2_OP_MODE_HNP_SRP_CAPABLE:
-		if (hsotg->params.otg_cap ==
-				DWC2_CAP_PARAM_HNP_SRP_CAPABLE)
+		if (hsotg->params.otg_caps.hnp_support &&
+		    hsotg->params.otg_caps.srp_support)
 			usbcfg |= GUSBCFG_HNPCAP;
-		if (hsotg->params.otg_cap !=
-				DWC2_CAP_PARAM_NO_HNP_SRP_CAPABLE)
-			usbcfg |= GUSBCFG_SRPCAP;
-		break;
+		fallthrough;
 
 	case GHWCFG2_OP_MODE_SRP_ONLY_CAPABLE:
 	case GHWCFG2_OP_MODE_SRP_CAPABLE_DEVICE:
 	case GHWCFG2_OP_MODE_SRP_CAPABLE_HOST:
-		if (hsotg->params.otg_cap !=
-				DWC2_CAP_PARAM_NO_HNP_SRP_CAPABLE)
+		if (hsotg->params.otg_caps.srp_support)
 			usbcfg |= GUSBCFG_SRPCAP;
 		break;
 
@@ -1005,7 +970,7 @@ static void dwc2_hc_set_even_odd_frame(struct dwc2_hsotg *hsotg,
 
 		/*
 		 * Try to figure out if we're an even or odd frame. If we set
-		 * even and the current frame number is even the the transfer
+		 * even and the current frame number is even the transfer
 		 * will happen immediately.  Similar if both are odd. If one is
 		 * even and the other is odd then the transfer will happen when
 		 * the frame number ticks.
@@ -1313,18 +1278,19 @@ static void dwc2_hc_start_transfer(struct dwc2_hsotg *hsotg,
 			if (num_packets > max_hc_pkt_count) {
 				num_packets = max_hc_pkt_count;
 				chan->xfer_len = num_packets * chan->max_packet;
+			} else if (chan->ep_is_in) {
+				/*
+				 * Always program an integral # of max packets
+				 * for IN transfers.
+				 * Note: This assumes that the input buffer is
+				 * aligned and sized accordingly.
+				 */
+				chan->xfer_len = num_packets * chan->max_packet;
 			}
 		} else {
 			/* Need 1 packet for transfer length of 0 */
 			num_packets = 1;
 		}
-
-		if (chan->ep_is_in)
-			/*
-			 * Always program an integral # of max packets for IN
-			 * transfers
-			 */
-			chan->xfer_len = num_packets * chan->max_packet;
 
 		if (chan->ep_type == USB_ENDPOINT_XFER_INT ||
 		    chan->ep_type == USB_ENDPOINT_XFER_ISOC)
@@ -2480,8 +2446,10 @@ static void dwc2_free_dma_aligned_buffer(struct urb *urb)
 		return;
 
 	/* Restore urb->transfer_buffer from the end of the allocated area */
-	memcpy(&stored_xfer_buffer, urb->transfer_buffer +
-	       urb->transfer_buffer_length, sizeof(urb->transfer_buffer));
+	memcpy(&stored_xfer_buffer,
+	       PTR_ALIGN(urb->transfer_buffer + urb->transfer_buffer_length,
+			 dma_get_cache_alignment()),
+	       sizeof(urb->transfer_buffer));
 
 	if (usb_urb_dir_in(urb)) {
 		if (usb_pipeisoc(urb->pipe))
@@ -2513,6 +2481,7 @@ static int dwc2_alloc_dma_aligned_buffer(struct urb *urb, gfp_t mem_flags)
 	 * DMA
 	 */
 	kmalloc_size = urb->transfer_buffer_length +
+		(dma_get_cache_alignment() - 1) +
 		sizeof(urb->transfer_buffer);
 
 	kmalloc_ptr = kmalloc(kmalloc_size, mem_flags);
@@ -2523,7 +2492,8 @@ static int dwc2_alloc_dma_aligned_buffer(struct urb *urb, gfp_t mem_flags)
 	 * Position value of original urb->transfer_buffer pointer to the end
 	 * of allocation for later referencing
 	 */
-	memcpy(kmalloc_ptr + urb->transfer_buffer_length,
+	memcpy(PTR_ALIGN(kmalloc_ptr + urb->transfer_buffer_length,
+			 dma_get_cache_alignment()),
 	       &urb->transfer_buffer, sizeof(urb->transfer_buffer));
 
 	if (usb_urb_dir_out(urb))
@@ -2608,7 +2578,7 @@ static int dwc2_assign_and_init_hc(struct dwc2_hsotg *hsotg, struct dwc2_qh *qh)
 	chan->dev_addr = dwc2_hcd_get_dev_addr(&urb->pipe_info);
 	chan->ep_num = dwc2_hcd_get_ep_num(&urb->pipe_info);
 	chan->speed = qh->dev_speed;
-	chan->max_packet = dwc2_max_packet(qh->maxp);
+	chan->max_packet = qh->maxp;
 
 	chan->xfer_started = 0;
 	chan->halt_status = DWC2_HC_XFER_NO_HALT_STATUS;
@@ -2686,7 +2656,7 @@ static int dwc2_assign_and_init_hc(struct dwc2_hsotg *hsotg, struct dwc2_qh *qh)
 		 * This value may be modified when the transfer is started
 		 * to reflect the actual transfer length
 		 */
-		chan->multi_count = dwc2_hb_mult(qh->maxp);
+		chan->multi_count = qh->maxp_mult;
 
 	if (hsotg->params.dma_desc_enable) {
 		chan->desc_list_addr = qh->desc_list_dma;
@@ -2731,8 +2701,11 @@ enum dwc2_transaction_type dwc2_hcd_select_transactions(
 			hsotg->available_host_channels--;
 		}
 		qh = list_entry(qh_ptr, struct dwc2_qh, qh_list_entry);
-		if (dwc2_assign_and_init_hc(hsotg, qh))
+		if (dwc2_assign_and_init_hc(hsotg, qh)) {
+			if (hsotg->params.uframe_sched)
+				hsotg->available_host_channels++;
 			break;
+		}
 
 		/*
 		 * Move the QH from the periodic ready schedule to the
@@ -2765,8 +2738,11 @@ enum dwc2_transaction_type dwc2_hcd_select_transactions(
 			hsotg->available_host_channels--;
 		}
 
-		if (dwc2_assign_and_init_hc(hsotg, qh))
+		if (dwc2_assign_and_init_hc(hsotg, qh)) {
+			if (hsotg->params.uframe_sched)
+				hsotg->available_host_channels++;
 			break;
+		}
 
 		/*
 		 * Move the QH from the non-periodic inactive schedule to the
@@ -2820,7 +2796,7 @@ static int dwc2_queue_transaction(struct dwc2_hsotg *hsotg,
 		list_move_tail(&chan->split_order_list_entry,
 			       &hsotg->split_order);
 
-	if (hsotg->params.host_dma) {
+	if (hsotg->params.host_dma && chan->qh) {
 		if (hsotg->params.dma_desc_enable) {
 			if (!chan->xfer_started ||
 			    chan->ep_type == USB_ENDPOINT_XFER_ISOC) {
@@ -3203,6 +3179,15 @@ static void dwc2_conn_id_status_change(struct work_struct *work)
 		if (count > 250)
 			dev_err(hsotg->dev,
 				"Connection id status change timed out\n");
+
+		/*
+		 * Exit Partial Power Down without restoring registers.
+		 * No need to check the return value as registers
+		 * are not being restored.
+		 */
+		if (hsotg->in_ppd && hsotg->lx_state == DWC2_L2)
+			dwc2_exit_partial_power_down(hsotg, 0, false);
+
 		hsotg->op_state = OTG_STATE_B_PERIPHERAL;
 		dwc2_core_init(hsotg, false);
 		dwc2_enable_global_interrupts(hsotg);
@@ -3272,13 +3257,23 @@ static int dwc2_host_is_b_hnp_enabled(struct dwc2_hsotg *hsotg)
 	return hcd->self.b_hnp_enable;
 }
 
-/* Must NOT be called with interrupt disabled or spinlock held */
-static void dwc2_port_suspend(struct dwc2_hsotg *hsotg, u16 windex)
+/**
+ * dwc2_port_suspend() - Put controller in suspend mode for host.
+ *
+ * @hsotg: Programming view of the DWC_otg controller
+ * @windex: The control request wIndex field
+ *
+ * Return: non-zero if failed to enter suspend mode for host.
+ *
+ * This function is for entering Host mode suspend.
+ * Must NOT be called with interrupt disabled or spinlock held.
+ */
+int dwc2_port_suspend(struct dwc2_hsotg *hsotg, u16 windex)
 {
 	unsigned long flags;
-	u32 hprt0;
 	u32 pcgctl;
 	u32 gotgctl;
+	int ret = 0;
 
 	dev_dbg(hsotg->dev, "%s()\n", __func__);
 
@@ -3291,22 +3286,34 @@ static void dwc2_port_suspend(struct dwc2_hsotg *hsotg, u16 windex)
 		hsotg->op_state = OTG_STATE_A_SUSPEND;
 	}
 
-	hprt0 = dwc2_read_hprt0(hsotg);
-	hprt0 |= HPRT0_SUSP;
-	dwc2_writel(hsotg, hprt0, HPRT0);
-
-	hsotg->bus_suspended = true;
-
-	/*
-	 * If power_down is supported, Phy clock will be suspended
-	 * after registers are backuped.
-	 */
-	if (!hsotg->params.power_down) {
-		/* Suspend the Phy Clock */
-		pcgctl = dwc2_readl(hsotg, PCGCTL);
-		pcgctl |= PCGCTL_STOPPCLK;
-		dwc2_writel(hsotg, pcgctl, PCGCTL);
-		udelay(10);
+	switch (hsotg->params.power_down) {
+	case DWC2_POWER_DOWN_PARAM_PARTIAL:
+		ret = dwc2_enter_partial_power_down(hsotg);
+		if (ret)
+			dev_err(hsotg->dev,
+				"enter partial_power_down failed.\n");
+		break;
+	case DWC2_POWER_DOWN_PARAM_HIBERNATION:
+		/*
+		 * Perform spin unlock and lock because in
+		 * "dwc2_host_enter_hibernation()" function there is a spinlock
+		 * logic which prevents servicing of any IRQ during entering
+		 * hibernation.
+		 */
+		spin_unlock_irqrestore(&hsotg->lock, flags);
+		ret = dwc2_enter_hibernation(hsotg, 1);
+		if (ret)
+			dev_err(hsotg->dev, "enter hibernation failed.\n");
+		spin_lock_irqsave(&hsotg->lock, flags);
+		break;
+	case DWC2_POWER_DOWN_PARAM_NONE:
+		/*
+		 * If not hibernation nor partial power down are supported,
+		 * clock gating is used to save power.
+		 */
+		if (!hsotg->params.no_clock_gating)
+			dwc2_host_enter_clock_gating(hsotg);
+		break;
 	}
 
 	/* For HNP the bus must be suspended for at least 200ms */
@@ -3321,44 +3328,54 @@ static void dwc2_port_suspend(struct dwc2_hsotg *hsotg, u16 windex)
 	} else {
 		spin_unlock_irqrestore(&hsotg->lock, flags);
 	}
+
+	return ret;
 }
 
-/* Must NOT be called with interrupt disabled or spinlock held */
-static void dwc2_port_resume(struct dwc2_hsotg *hsotg)
+/**
+ * dwc2_port_resume() - Exit controller from suspend mode for host.
+ *
+ * @hsotg: Programming view of the DWC_otg controller
+ *
+ * Return: non-zero if failed to exit suspend mode for host.
+ *
+ * This function is for exiting Host mode suspend.
+ * Must NOT be called with interrupt disabled or spinlock held.
+ */
+int dwc2_port_resume(struct dwc2_hsotg *hsotg)
 {
 	unsigned long flags;
-	u32 hprt0;
-	u32 pcgctl;
+	int ret = 0;
 
 	spin_lock_irqsave(&hsotg->lock, flags);
 
-	/*
-	 * If power_down is supported, Phy clock is already resumed
-	 * after registers restore.
-	 */
-	if (!hsotg->params.power_down) {
-		pcgctl = dwc2_readl(hsotg, PCGCTL);
-		pcgctl &= ~PCGCTL_STOPPCLK;
-		dwc2_writel(hsotg, pcgctl, PCGCTL);
+	switch (hsotg->params.power_down) {
+	case DWC2_POWER_DOWN_PARAM_PARTIAL:
+		ret = dwc2_exit_partial_power_down(hsotg, 0, true);
+		if (ret)
+			dev_err(hsotg->dev,
+				"exit partial_power_down failed.\n");
+		break;
+	case DWC2_POWER_DOWN_PARAM_HIBERNATION:
+		/* Exit host hibernation. */
+		ret = dwc2_exit_hibernation(hsotg, 0, 0, 1);
+		if (ret)
+			dev_err(hsotg->dev, "exit hibernation failed.\n");
+		break;
+	case DWC2_POWER_DOWN_PARAM_NONE:
+		/*
+		 * If not hibernation nor partial power down are supported,
+		 * port resume is done using the clock gating programming flow.
+		 */
 		spin_unlock_irqrestore(&hsotg->lock, flags);
-		msleep(20);
+		dwc2_host_exit_clock_gating(hsotg, 0);
 		spin_lock_irqsave(&hsotg->lock, flags);
+		break;
 	}
 
-	hprt0 = dwc2_read_hprt0(hsotg);
-	hprt0 |= HPRT0_RES;
-	hprt0 &= ~HPRT0_SUSP;
-	dwc2_writel(hsotg, hprt0, HPRT0);
 	spin_unlock_irqrestore(&hsotg->lock, flags);
 
-	msleep(USB_RESUME_TIMEOUT);
-
-	spin_lock_irqsave(&hsotg->lock, flags);
-	hprt0 = dwc2_read_hprt0(hsotg);
-	hprt0 &= ~(HPRT0_RES | HPRT0_SUSP);
-	dwc2_writel(hsotg, hprt0, HPRT0);
-	hsotg->bus_suspended = false;
-	spin_unlock_irqrestore(&hsotg->lock, flags);
+	return ret;
 }
 
 /* Handles hub class-specific requests */
@@ -3408,12 +3425,8 @@ static int dwc2_hcd_hub_control(struct dwc2_hsotg *hsotg, u16 typereq,
 			dev_dbg(hsotg->dev,
 				"ClearPortFeature USB_PORT_FEAT_SUSPEND\n");
 
-			if (hsotg->bus_suspended) {
-				if (hsotg->hibernated)
-					dwc2_exit_hibernation(hsotg, 0, 0, 1);
-				else
-					dwc2_port_resume(hsotg);
-			}
+			if (hsotg->bus_suspended)
+				retval = dwc2_port_resume(hsotg);
 			break;
 
 		case USB_PORT_FEAT_POWER:
@@ -3624,10 +3637,8 @@ static int dwc2_hcd_hub_control(struct dwc2_hsotg *hsotg, u16 typereq,
 				"SetPortFeature - USB_PORT_FEAT_SUSPEND\n");
 			if (windex != hsotg->otg_port)
 				goto error;
-			if (hsotg->params.power_down == 2)
-				dwc2_enter_hibernation(hsotg, 1);
-			else
-				dwc2_port_suspend(hsotg, windex);
+			if (!hsotg->bus_suspended)
+				retval = dwc2_port_suspend(hsotg, windex);
 			break;
 
 		case USB_PORT_FEAT_POWER:
@@ -3642,12 +3653,30 @@ static int dwc2_hcd_hub_control(struct dwc2_hsotg *hsotg, u16 typereq,
 			break;
 
 		case USB_PORT_FEAT_RESET:
-			if (hsotg->params.power_down == 2 &&
-			    hsotg->hibernated)
-				dwc2_exit_hibernation(hsotg, 0, 1, 1);
-			hprt0 = dwc2_read_hprt0(hsotg);
 			dev_dbg(hsotg->dev,
 				"SetPortFeature - USB_PORT_FEAT_RESET\n");
+
+			hprt0 = dwc2_read_hprt0(hsotg);
+
+			if (hsotg->hibernated) {
+				retval = dwc2_exit_hibernation(hsotg, 0, 1, 1);
+				if (retval)
+					dev_err(hsotg->dev,
+						"exit hibernation failed\n");
+			}
+
+			if (hsotg->in_ppd) {
+				retval = dwc2_exit_partial_power_down(hsotg, 1,
+								      true);
+				if (retval)
+					dev_err(hsotg->dev,
+						"exit partial_power_down failed\n");
+			}
+
+			if (hsotg->params.power_down ==
+			    DWC2_POWER_DOWN_PARAM_NONE && hsotg->bus_suspended)
+				dwc2_host_exit_clock_gating(hsotg, 0);
+
 			pcgctl = dwc2_readl(hsotg, PCGCTL);
 			pcgctl &= ~(PCGCTL_ENBL_SLEEP_GATING | PCGCTL_STOPPCLK);
 			dwc2_writel(hsotg, pcgctl, PCGCTL);
@@ -3806,19 +3835,21 @@ static struct dwc2_hcd_urb *dwc2_hcd_urb_alloc(struct dwc2_hsotg *hsotg,
 
 static void dwc2_hcd_urb_set_pipeinfo(struct dwc2_hsotg *hsotg,
 				      struct dwc2_hcd_urb *urb, u8 dev_addr,
-				      u8 ep_num, u8 ep_type, u8 ep_dir, u16 mps)
+				      u8 ep_num, u8 ep_type, u8 ep_dir,
+				      u16 maxp, u16 maxp_mult)
 {
 	if (dbg_perio() ||
 	    ep_type == USB_ENDPOINT_XFER_BULK ||
 	    ep_type == USB_ENDPOINT_XFER_CONTROL)
 		dev_vdbg(hsotg->dev,
-			 "addr=%d, ep_num=%d, ep_dir=%1x, ep_type=%1x, mps=%d\n",
-			 dev_addr, ep_num, ep_dir, ep_type, mps);
+			 "addr=%d, ep_num=%d, ep_dir=%1x, ep_type=%1x, maxp=%d (%d mult)\n",
+			 dev_addr, ep_num, ep_dir, ep_type, maxp, maxp_mult);
 	urb->pipe_info.dev_addr = dev_addr;
 	urb->pipe_info.ep_num = ep_num;
 	urb->pipe_info.pipe_type = ep_type;
 	urb->pipe_info.pipe_dir = ep_dir;
-	urb->pipe_info.mps = mps;
+	urb->pipe_info.maxp = maxp;
+	urb->pipe_info.maxp_mult = maxp_mult;
 }
 
 /*
@@ -3909,8 +3940,9 @@ void dwc2_hcd_dump_state(struct dwc2_hsotg *hsotg)
 					dwc2_hcd_is_pipe_in(&urb->pipe_info) ?
 					"IN" : "OUT");
 				dev_dbg(hsotg->dev,
-					"      Max packet size: %d\n",
-					dwc2_hcd_get_mps(&urb->pipe_info));
+					"      Max packet size: %d (%d mult)\n",
+					dwc2_hcd_get_maxp(&urb->pipe_info),
+					dwc2_hcd_get_maxp_mult(&urb->pipe_info));
 				dev_dbg(hsotg->dev,
 					"      transfer_buffer: %p\n",
 					urb->buf);
@@ -4117,6 +4149,8 @@ void dwc2_host_complete(struct dwc2_hsotg *hsotg, struct dwc2_qtd *qtd,
 			 urb->actual_length);
 
 	if (usb_pipetype(urb->pipe) == PIPE_ISOCHRONOUS) {
+		if (!hsotg->params.dma_desc_enable)
+			urb->start_frame = qtd->qh->start_active_frame;
 		urb->error_count = dwc2_hcd_urb_get_error_count(qtd->urb);
 		for (i = 0; i < urb->number_of_packets; ++i) {
 			urb->iso_frame_desc[i].actual_length =
@@ -4297,8 +4331,6 @@ static int _dwc2_hcd_suspend(struct usb_hcd *hcd)
 	struct dwc2_hsotg *hsotg = dwc2_hcd_to_hsotg(hcd);
 	unsigned long flags;
 	int ret = 0;
-	u32 hprt0;
-	u32 pcgctl;
 
 	spin_lock_irqsave(&hsotg->lock, flags);
 
@@ -4314,45 +4346,52 @@ static int _dwc2_hcd_suspend(struct usb_hcd *hcd)
 	if (hsotg->op_state == OTG_STATE_B_PERIPHERAL)
 		goto unlock;
 
-	if (hsotg->params.power_down > DWC2_POWER_DOWN_PARAM_PARTIAL)
+	if (hsotg->bus_suspended)
 		goto skip_power_saving;
 
-	/*
-	 * Drive USB suspend and disable port Power
-	 * if usb bus is not suspended.
-	 */
-	if (!hsotg->bus_suspended) {
-		hprt0 = dwc2_read_hprt0(hsotg);
-		if (hprt0 & HPRT0_CONNSTS) {
-			hprt0 |= HPRT0_SUSP;
-			if (hsotg->params.power_down == DWC2_POWER_DOWN_PARAM_PARTIAL)
-				hprt0 &= ~HPRT0_PWR;
-			dwc2_writel(hsotg, hprt0, HPRT0);
-		}
-		if (hsotg->params.power_down == DWC2_POWER_DOWN_PARAM_PARTIAL) {
-			spin_unlock_irqrestore(&hsotg->lock, flags);
-			dwc2_vbus_supply_exit(hsotg);
-			spin_lock_irqsave(&hsotg->lock, flags);
-		} else {
-			pcgctl = readl(hsotg->regs + PCGCTL);
-			pcgctl |= PCGCTL_STOPPCLK;
-			writel(pcgctl, hsotg->regs + PCGCTL);
-		}
-	}
+	if (hsotg->flags.b.port_connect_status == 0)
+		goto skip_power_saving;
 
-	if (hsotg->params.power_down == DWC2_POWER_DOWN_PARAM_PARTIAL) {
+	switch (hsotg->params.power_down) {
+	case DWC2_POWER_DOWN_PARAM_PARTIAL:
 		/* Enter partial_power_down */
 		ret = dwc2_enter_partial_power_down(hsotg);
-		if (ret) {
-			if (ret != -ENOTSUPP)
-				dev_err(hsotg->dev,
-					"enter partial_power_down failed\n");
-			goto skip_power_saving;
-		}
-
-		/* After entering partial_power_down, hardware is no more accessible */
+		if (ret)
+			dev_err(hsotg->dev,
+				"enter partial_power_down failed\n");
+		/* After entering suspend, hardware is not accessible */
 		clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+		break;
+	case DWC2_POWER_DOWN_PARAM_HIBERNATION:
+		/* Enter hibernation */
+		spin_unlock_irqrestore(&hsotg->lock, flags);
+		ret = dwc2_enter_hibernation(hsotg, 1);
+		if (ret)
+			dev_err(hsotg->dev, "enter hibernation failed\n");
+		spin_lock_irqsave(&hsotg->lock, flags);
+
+		/* After entering suspend, hardware is not accessible */
+		clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+		break;
+	case DWC2_POWER_DOWN_PARAM_NONE:
+		/*
+		 * If not hibernation nor partial power down are supported,
+		 * clock gating is used to save power.
+		 */
+		if (!hsotg->params.no_clock_gating) {
+			dwc2_host_enter_clock_gating(hsotg);
+
+			/* After entering suspend, hardware is not accessible */
+			clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+		}
+		break;
+	default:
+		goto skip_power_saving;
 	}
+
+	spin_unlock_irqrestore(&hsotg->lock, flags);
+	dwc2_vbus_supply_exit(hsotg);
+	spin_lock_irqsave(&hsotg->lock, flags);
 
 	/* Ask phy to be suspended */
 	if (!IS_ERR_OR_NULL(hsotg->uphy)) {
@@ -4373,7 +4412,7 @@ static int _dwc2_hcd_resume(struct usb_hcd *hcd)
 {
 	struct dwc2_hsotg *hsotg = dwc2_hcd_to_hsotg(hcd);
 	unsigned long flags;
-	u32 pcgctl;
+	u32 hprt0;
 	int ret = 0;
 
 	spin_lock_irqsave(&hsotg->lock, flags);
@@ -4384,10 +4423,71 @@ static int _dwc2_hcd_resume(struct usb_hcd *hcd)
 	if (hsotg->lx_state != DWC2_L2)
 		goto unlock;
 
-	if (hsotg->params.power_down > DWC2_POWER_DOWN_PARAM_PARTIAL) {
+	hprt0 = dwc2_read_hprt0(hsotg);
+
+	/*
+	 * Added port connection status checking which prevents exiting from
+	 * Partial Power Down mode from _dwc2_hcd_resume() if not in Partial
+	 * Power Down mode.
+	 */
+	if (hprt0 & HPRT0_CONNSTS) {
 		hsotg->lx_state = DWC2_L0;
 		goto unlock;
 	}
+
+	switch (hsotg->params.power_down) {
+	case DWC2_POWER_DOWN_PARAM_PARTIAL:
+		ret = dwc2_exit_partial_power_down(hsotg, 0, true);
+		if (ret)
+			dev_err(hsotg->dev,
+				"exit partial_power_down failed\n");
+		/*
+		 * Set HW accessible bit before powering on the controller
+		 * since an interrupt may rise.
+		 */
+		set_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+		break;
+	case DWC2_POWER_DOWN_PARAM_HIBERNATION:
+		ret = dwc2_exit_hibernation(hsotg, 0, 0, 1);
+		if (ret)
+			dev_err(hsotg->dev, "exit hibernation failed.\n");
+
+		/*
+		 * Set HW accessible bit before powering on the controller
+		 * since an interrupt may rise.
+		 */
+		set_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+		break;
+	case DWC2_POWER_DOWN_PARAM_NONE:
+		/*
+		 * If not hibernation nor partial power down are supported,
+		 * port resume is done using the clock gating programming flow.
+		 */
+		spin_unlock_irqrestore(&hsotg->lock, flags);
+		dwc2_host_exit_clock_gating(hsotg, 0);
+
+		/*
+		 * Initialize the Core for Host mode, as after system resume
+		 * the global interrupts are disabled.
+		 */
+		dwc2_core_init(hsotg, false);
+		dwc2_enable_global_interrupts(hsotg);
+		dwc2_hcd_reinit(hsotg);
+		spin_lock_irqsave(&hsotg->lock, flags);
+
+		/*
+		 * Set HW accessible bit before powering on the controller
+		 * since an interrupt may rise.
+		 */
+		set_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+		break;
+	default:
+		hsotg->lx_state = DWC2_L0;
+		goto unlock;
+	}
+
+	/* Change Root port status, as port status change occurred after resume.*/
+	hsotg->flags.b.port_suspend_change = 1;
 
 	/*
 	 * Enable power if not already done.
@@ -4400,52 +4500,25 @@ static int _dwc2_hcd_resume(struct usb_hcd *hcd)
 		spin_lock_irqsave(&hsotg->lock, flags);
 	}
 
-	if (hsotg->params.power_down == DWC2_POWER_DOWN_PARAM_PARTIAL) {
-		/*
-		 * Set HW accessible bit before powering on the controller
-		 * since an interrupt may rise.
-		 */
-		set_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
-
-
-		/* Exit partial_power_down */
-		ret = dwc2_exit_partial_power_down(hsotg, true);
-		if (ret && (ret != -ENOTSUPP))
-			dev_err(hsotg->dev, "exit partial_power_down failed\n");
-	} else {
-		pcgctl = readl(hsotg->regs + PCGCTL);
-		pcgctl &= ~PCGCTL_STOPPCLK;
-		writel(pcgctl, hsotg->regs + PCGCTL);
-	}
-
-	hsotg->lx_state = DWC2_L0;
-
+	/* Enable external vbus supply after resuming the port. */
 	spin_unlock_irqrestore(&hsotg->lock, flags);
+	dwc2_vbus_supply_init(hsotg);
 
-	if (hsotg->bus_suspended) {
-		spin_lock_irqsave(&hsotg->lock, flags);
-		hsotg->flags.b.port_suspend_change = 1;
-		spin_unlock_irqrestore(&hsotg->lock, flags);
-		dwc2_port_resume(hsotg);
-	} else {
-		if (hsotg->params.power_down == DWC2_POWER_DOWN_PARAM_PARTIAL) {
-			dwc2_vbus_supply_init(hsotg);
+	/* Wait for controller to correctly update D+/D- level */
+	usleep_range(3000, 5000);
+	spin_lock_irqsave(&hsotg->lock, flags);
 
-			/* Wait for controller to correctly update D+/D- level */
-			usleep_range(3000, 5000);
-		}
+	/*
+	 * Clear Port Enable and Port Status changes.
+	 * Enable Port Power.
+	 */
+	dwc2_writel(hsotg, HPRT0_PWR | HPRT0_CONNDET |
+			HPRT0_ENACHG, HPRT0);
 
-		/*
-		 * Clear Port Enable and Port Status changes.
-		 * Enable Port Power.
-		 */
-		dwc2_writel(hsotg, HPRT0_PWR | HPRT0_CONNDET |
-				HPRT0_ENACHG, HPRT0);
-		/* Wait for controller to detect Port Connect */
-		usleep_range(5000, 7000);
-	}
-
-	return ret;
+	/* Wait for controller to detect Port Connect */
+	spin_unlock_irqrestore(&hsotg->lock, flags);
+	usleep_range(5000, 7000);
+	spin_lock_irqsave(&hsotg->lock, flags);
 unlock:
 	spin_unlock_irqrestore(&hsotg->lock, flags);
 
@@ -4510,8 +4583,10 @@ static void dwc2_dump_urb_info(struct usb_hcd *hcd, struct urb *urb,
 	}
 
 	dev_vdbg(hsotg->dev, "  Speed: %s\n", speed);
-	dev_vdbg(hsotg->dev, "  Max packet size: %d\n",
-		 usb_maxpacket(urb->dev, urb->pipe, usb_pipeout(urb->pipe)));
+	dev_vdbg(hsotg->dev, "  Max packet size: %d (%d mult)\n",
+		 usb_endpoint_maxp(&urb->ep->desc),
+		 usb_endpoint_maxp_mult(&urb->ep->desc));
+
 	dev_vdbg(hsotg->dev, "  Data buffer length: %d\n",
 		 urb->transfer_buffer_length);
 	dev_vdbg(hsotg->dev, "  Transfer buffer: %p, Transfer DMA: %08lx\n",
@@ -4554,10 +4629,39 @@ static int _dwc2_hcd_urb_enqueue(struct usb_hcd *hcd, struct urb *urb,
 	struct dwc2_qh *qh;
 	bool qh_allocated = false;
 	struct dwc2_qtd *qtd;
+	struct dwc2_gregs_backup *gr;
+
+	gr = &hsotg->gr_backup;
 
 	if (dbg_urb(urb)) {
 		dev_vdbg(hsotg->dev, "DWC OTG HCD URB Enqueue\n");
 		dwc2_dump_urb_info(hcd, urb, "urb_enqueue");
+	}
+
+	if (hsotg->hibernated) {
+		if (gr->gotgctl & GOTGCTL_CURMODE_HOST)
+			retval = dwc2_exit_hibernation(hsotg, 0, 0, 1);
+		else
+			retval = dwc2_exit_hibernation(hsotg, 0, 0, 0);
+
+		if (retval)
+			dev_err(hsotg->dev,
+				"exit hibernation failed.\n");
+	}
+
+	if (hsotg->in_ppd) {
+		retval = dwc2_exit_partial_power_down(hsotg, 0, true);
+		if (retval)
+			dev_err(hsotg->dev,
+				"exit partial_power_down failed\n");
+	}
+
+	if (hsotg->params.power_down == DWC2_POWER_DOWN_PARAM_NONE &&
+	    hsotg->bus_suspended && !hsotg->params.no_clock_gating) {
+		if (dwc2_is_device_mode(hsotg))
+			dwc2_gadget_exit_clock_gating(hsotg, 0);
+		else
+			dwc2_host_exit_clock_gating(hsotg, 0);
 	}
 
 	if (!ep)
@@ -4594,12 +4698,12 @@ static int _dwc2_hcd_urb_enqueue(struct usb_hcd *hcd, struct urb *urb,
 	dwc2_hcd_urb_set_pipeinfo(hsotg, dwc2_urb, usb_pipedevice(urb->pipe),
 				  usb_pipeendpoint(urb->pipe), ep_type,
 				  usb_pipein(urb->pipe),
-				  usb_maxpacket(urb->dev, urb->pipe,
-						!(usb_pipein(urb->pipe))));
+				  usb_endpoint_maxp(&ep->desc),
+				  usb_endpoint_maxp_mult(&ep->desc));
 
 	buf = urb->transfer_buffer;
 
-	if (hcd->self.uses_dma) {
+	if (hcd_uses_dma(hcd)) {
 		if (!buf && (urb->transfer_dma & 3)) {
 			dev_err(hsotg->dev,
 				"%s: unaligned transfer with no transfer_buffer",
@@ -4673,10 +4777,9 @@ fail3:
 	if (qh_allocated && qh->channel && qh->channel->qh == qh)
 		qh->channel->qh = NULL;
 fail2:
-	spin_unlock_irqrestore(&hsotg->lock, flags);
 	urb->hcpriv = NULL;
+	spin_unlock_irqrestore(&hsotg->lock, flags);
 	kfree(qtd);
-	qtd = NULL;
 fail1:
 	if (qh_allocated) {
 		struct dwc2_qtd *qtd2, *qtd2_tmp;
@@ -5054,16 +5157,20 @@ int dwc2_hcd_init(struct dwc2_hsotg *hsotg)
 		dwc2_hc_driver.reset_device = dwc2_reset_device;
 	}
 
+	if (hsotg->params.host_dma)
+		dwc2_hc_driver.flags |= HCD_DMA;
+
 	hcd = usb_create_hcd(&dwc2_hc_driver, hsotg->dev, dev_name(hsotg->dev));
 	if (!hcd)
 		goto error1;
 
-	if (!hsotg->params.host_dma)
-		hcd->self.uses_dma = 0;
-
 	hcd->has_tt = 1;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res) {
+		retval = -EINVAL;
+		goto error2;
+	}
 	hcd->rsrc_start = res->start;
 	hcd->rsrc_len = resource_size(res);
 
@@ -5211,6 +5318,8 @@ int dwc2_hcd_init(struct dwc2_hsotg *hsotg)
 	/* Don't support SG list at this point */
 	hcd->self.sg_tablesize = 0;
 
+	hcd->tpl_support = of_usb_host_tpl_support(hsotg->dev->of_node);
+
 	if (!IS_ERR_OR_NULL(hsotg->uphy))
 		otg_set_host(hsotg->uphy->otg, &hcd->self);
 
@@ -5305,9 +5414,16 @@ int dwc2_backup_host_registers(struct dwc2_hsotg *hsotg)
 	/* Backup Host regs */
 	hr = &hsotg->hr_backup;
 	hr->hcfg = dwc2_readl(hsotg, HCFG);
+	hr->hflbaddr = dwc2_readl(hsotg, HFLBADDR);
 	hr->haintmsk = dwc2_readl(hsotg, HAINTMSK);
-	for (i = 0; i < hsotg->params.host_channels; ++i)
+	for (i = 0; i < hsotg->params.host_channels; ++i) {
+		hr->hcchar[i] = dwc2_readl(hsotg, HCCHAR(i));
+		hr->hcsplt[i] = dwc2_readl(hsotg, HCSPLT(i));
 		hr->hcintmsk[i] = dwc2_readl(hsotg, HCINTMSK(i));
+		hr->hctsiz[i] = dwc2_readl(hsotg, HCTSIZ(i));
+		hr->hcidma[i] = dwc2_readl(hsotg, HCDMA(i));
+		hr->hcidmab[i] = dwc2_readl(hsotg, HCDMAB(i));
+	}
 
 	hr->hprt0 = dwc2_read_hprt0(hsotg);
 	hr->hfir = dwc2_readl(hsotg, HFIR);
@@ -5341,10 +5457,17 @@ int dwc2_restore_host_registers(struct dwc2_hsotg *hsotg)
 	hr->valid = false;
 
 	dwc2_writel(hsotg, hr->hcfg, HCFG);
+	dwc2_writel(hsotg, hr->hflbaddr, HFLBADDR);
 	dwc2_writel(hsotg, hr->haintmsk, HAINTMSK);
 
-	for (i = 0; i < hsotg->params.host_channels; ++i)
+	for (i = 0; i < hsotg->params.host_channels; ++i) {
+		dwc2_writel(hsotg, hr->hcchar[i], HCCHAR(i));
+		dwc2_writel(hsotg, hr->hcsplt[i], HCSPLT(i));
 		dwc2_writel(hsotg, hr->hcintmsk[i], HCINTMSK(i));
+		dwc2_writel(hsotg, hr->hctsiz[i], HCTSIZ(i));
+		dwc2_writel(hsotg, hr->hcidma[i], HCDMA(i));
+		dwc2_writel(hsotg, hr->hcidmab[i], HCDMAB(i));
+	}
 
 	dwc2_writel(hsotg, hr->hprt0, HPRT0);
 	dwc2_writel(hsotg, hr->hfir, HFIR);
@@ -5389,7 +5512,7 @@ int dwc2_host_enter_hibernation(struct dwc2_hsotg *hsotg)
 	dwc2_writel(hsotg, hprt0, HPRT0);
 
 	/* Wait for the HPRT0.PrtSusp register field to be set */
-	if (dwc2_hsotg_wait_bit_set(hsotg, HPRT0, HPRT0_SUSP, 3000))
+	if (dwc2_hsotg_wait_bit_set(hsotg, HPRT0, HPRT0_SUSP, 5000))
 		dev_warn(hsotg->dev, "Suspend wasn't generated\n");
 
 	/*
@@ -5402,6 +5525,11 @@ int dwc2_host_enter_hibernation(struct dwc2_hsotg *hsotg)
 	gusbcfg = dwc2_readl(hsotg, GUSBCFG);
 	if (gusbcfg & GUSBCFG_ULPI_UTMI_SEL) {
 		/* ULPI interface */
+		udelay(10);
+		gpwrdn = dwc2_readl(hsotg, GPWRDN);
+		gpwrdn |= GPWRDN_ULPI_LATCH_EN_DURING_HIB_ENTRY;
+		dwc2_writel(hsotg, gpwrdn, GPWRDN);
+		udelay(10);
 		/* Suspend the Phy Clock */
 		pcgcctl = dwc2_readl(hsotg, PCGCTL);
 		pcgcctl |= PCGCTL_STOPPCLK;
@@ -5508,11 +5636,18 @@ int dwc2_host_exit_hibernation(struct dwc2_hsotg *hsotg, int rem_wakeup,
 	dwc2_writel(hsotg, gr->gusbcfg, GUSBCFG);
 	dwc2_writel(hsotg, hr->hcfg, HCFG);
 
-	/* De-assert Wakeup Logic */
+	/* Reset ULPI latch */
 	gpwrdn = dwc2_readl(hsotg, GPWRDN);
-	gpwrdn &= ~GPWRDN_PMUACTV;
+	gpwrdn &= ~GPWRDN_ULPI_LATCH_EN_DURING_HIB_ENTRY;
 	dwc2_writel(hsotg, gpwrdn, GPWRDN);
-	udelay(10);
+
+	/* De-assert Wakeup Logic */
+	if (!(rem_wakeup && hsotg->hw_params.snpsid >= DWC2_CORE_REV_4_30a)) {
+		gpwrdn = dwc2_readl(hsotg, GPWRDN);
+		gpwrdn &= ~GPWRDN_PMUACTV;
+		dwc2_writel(hsotg, gpwrdn, GPWRDN);
+		udelay(10);
+	}
 
 	hprt0 = hr->hprt0;
 	hprt0 |= HPRT0_PWR;
@@ -5537,6 +5672,13 @@ int dwc2_host_exit_hibernation(struct dwc2_hsotg *hsotg, int rem_wakeup,
 		hprt0 |= HPRT0_RES;
 		dwc2_writel(hsotg, hprt0, HPRT0);
 
+		/* De-assert Wakeup Logic */
+		if ((rem_wakeup && hsotg->hw_params.snpsid >= DWC2_CORE_REV_4_30a)) {
+			gpwrdn = dwc2_readl(hsotg, GPWRDN);
+			gpwrdn &= ~GPWRDN_PMUACTV;
+			dwc2_writel(hsotg, gpwrdn, GPWRDN);
+			udelay(10);
+		}
 		/* Wait for Resume time and then program HPRT again */
 		mdelay(100);
 		hprt0 &= ~HPRT0_RES;
@@ -5570,11 +5712,284 @@ int dwc2_host_exit_hibernation(struct dwc2_hsotg *hsotg, int rem_wakeup,
 		return ret;
 	}
 
-	dwc2_hcd_rem_wakeup(hsotg);
+	if (rem_wakeup) {
+		dwc2_hcd_rem_wakeup(hsotg);
+		/*
+		 * Change "port_connect_status_change" flag to re-enumerate,
+		 * because after exit from hibernation port connection status
+		 * is not detected.
+		 */
+		hsotg->flags.b.port_connect_status_change = 1;
+	}
 
 	hsotg->hibernated = 0;
 	hsotg->bus_suspended = 0;
 	hsotg->lx_state = DWC2_L0;
 	dev_dbg(hsotg->dev, "Host hibernation restore complete\n");
 	return ret;
+}
+
+bool dwc2_host_can_poweroff_phy(struct dwc2_hsotg *dwc2)
+{
+	struct usb_device *root_hub = dwc2_hsotg_to_hcd(dwc2)->self.root_hub;
+
+	/* If the controller isn't allowed to wakeup then we can power off. */
+	if (!device_may_wakeup(dwc2->dev))
+		return true;
+
+	/*
+	 * We don't want to power off the PHY if something under the
+	 * root hub has wakeup enabled.
+	 */
+	if (usb_wakeup_enabled_descendants(root_hub))
+		return false;
+
+	/* No reason to keep the PHY powered, so allow poweroff */
+	return true;
+}
+
+/**
+ * dwc2_host_enter_partial_power_down() - Put controller in partial
+ * power down.
+ *
+ * @hsotg: Programming view of the DWC_otg controller
+ *
+ * Return: non-zero if failed to enter host partial power down.
+ *
+ * This function is for entering Host mode partial power down.
+ */
+int dwc2_host_enter_partial_power_down(struct dwc2_hsotg *hsotg)
+{
+	u32 pcgcctl;
+	u32 hprt0;
+	int ret = 0;
+
+	dev_dbg(hsotg->dev, "Entering host partial power down started.\n");
+
+	/* Put this port in suspend mode. */
+	hprt0 = dwc2_read_hprt0(hsotg);
+	hprt0 |= HPRT0_SUSP;
+	dwc2_writel(hsotg, hprt0, HPRT0);
+	udelay(5);
+
+	/* Wait for the HPRT0.PrtSusp register field to be set */
+	if (dwc2_hsotg_wait_bit_set(hsotg, HPRT0, HPRT0_SUSP, 3000))
+		dev_warn(hsotg->dev, "Suspend wasn't generated\n");
+
+	/* Backup all registers */
+	ret = dwc2_backup_global_registers(hsotg);
+	if (ret) {
+		dev_err(hsotg->dev, "%s: failed to backup global registers\n",
+			__func__);
+		return ret;
+	}
+
+	ret = dwc2_backup_host_registers(hsotg);
+	if (ret) {
+		dev_err(hsotg->dev, "%s: failed to backup host registers\n",
+			__func__);
+		return ret;
+	}
+
+	/*
+	 * Clear any pending interrupts since dwc2 will not be able to
+	 * clear them after entering partial_power_down.
+	 */
+	dwc2_writel(hsotg, 0xffffffff, GINTSTS);
+
+	/* Put the controller in low power state */
+	pcgcctl = dwc2_readl(hsotg, PCGCTL);
+
+	pcgcctl |= PCGCTL_PWRCLMP;
+	dwc2_writel(hsotg, pcgcctl, PCGCTL);
+	udelay(5);
+
+	pcgcctl |= PCGCTL_RSTPDWNMODULE;
+	dwc2_writel(hsotg, pcgcctl, PCGCTL);
+	udelay(5);
+
+	pcgcctl |= PCGCTL_STOPPCLK;
+	dwc2_writel(hsotg, pcgcctl, PCGCTL);
+
+	/* Set in_ppd flag to 1 as here core enters suspend. */
+	hsotg->in_ppd = 1;
+	hsotg->lx_state = DWC2_L2;
+	hsotg->bus_suspended = true;
+
+	dev_dbg(hsotg->dev, "Entering host partial power down completed.\n");
+
+	return ret;
+}
+
+/*
+ * dwc2_host_exit_partial_power_down() - Exit controller from host partial
+ * power down.
+ *
+ * @hsotg: Programming view of the DWC_otg controller
+ * @rem_wakeup: indicates whether resume is initiated by Reset.
+ * @restore: indicates whether need to restore the registers or not.
+ *
+ * Return: non-zero if failed to exit host partial power down.
+ *
+ * This function is for exiting from Host mode partial power down.
+ */
+int dwc2_host_exit_partial_power_down(struct dwc2_hsotg *hsotg,
+				      int rem_wakeup, bool restore)
+{
+	u32 pcgcctl;
+	int ret = 0;
+	u32 hprt0;
+
+	dev_dbg(hsotg->dev, "Exiting host partial power down started.\n");
+
+	pcgcctl = dwc2_readl(hsotg, PCGCTL);
+	pcgcctl &= ~PCGCTL_STOPPCLK;
+	dwc2_writel(hsotg, pcgcctl, PCGCTL);
+	udelay(5);
+
+	pcgcctl = dwc2_readl(hsotg, PCGCTL);
+	pcgcctl &= ~PCGCTL_PWRCLMP;
+	dwc2_writel(hsotg, pcgcctl, PCGCTL);
+	udelay(5);
+
+	pcgcctl = dwc2_readl(hsotg, PCGCTL);
+	pcgcctl &= ~PCGCTL_RSTPDWNMODULE;
+	dwc2_writel(hsotg, pcgcctl, PCGCTL);
+
+	udelay(100);
+	if (restore) {
+		ret = dwc2_restore_global_registers(hsotg);
+		if (ret) {
+			dev_err(hsotg->dev, "%s: failed to restore registers\n",
+				__func__);
+			return ret;
+		}
+
+		ret = dwc2_restore_host_registers(hsotg);
+		if (ret) {
+			dev_err(hsotg->dev, "%s: failed to restore host registers\n",
+				__func__);
+			return ret;
+		}
+	}
+
+	/* Drive resume signaling and exit suspend mode on the port. */
+	hprt0 = dwc2_read_hprt0(hsotg);
+	hprt0 |= HPRT0_RES;
+	hprt0 &= ~HPRT0_SUSP;
+	dwc2_writel(hsotg, hprt0, HPRT0);
+	udelay(5);
+
+	if (!rem_wakeup) {
+		/* Stop driveing resume signaling on the port. */
+		hprt0 = dwc2_read_hprt0(hsotg);
+		hprt0 &= ~HPRT0_RES;
+		dwc2_writel(hsotg, hprt0, HPRT0);
+
+		hsotg->bus_suspended = false;
+	} else {
+		/* Turn on the port power bit. */
+		hprt0 = dwc2_read_hprt0(hsotg);
+		hprt0 |= HPRT0_PWR;
+		dwc2_writel(hsotg, hprt0, HPRT0);
+
+		/* Connect hcd. */
+		dwc2_hcd_connect(hsotg);
+
+		mod_timer(&hsotg->wkp_timer,
+			  jiffies + msecs_to_jiffies(71));
+	}
+
+	/* Set lx_state to and in_ppd to 0 as here core exits from suspend. */
+	hsotg->in_ppd = 0;
+	hsotg->lx_state = DWC2_L0;
+
+	dev_dbg(hsotg->dev, "Exiting host partial power down completed.\n");
+	return ret;
+}
+
+/**
+ * dwc2_host_enter_clock_gating() - Put controller in clock gating.
+ *
+ * @hsotg: Programming view of the DWC_otg controller
+ *
+ * This function is for entering Host mode clock gating.
+ */
+void dwc2_host_enter_clock_gating(struct dwc2_hsotg *hsotg)
+{
+	u32 hprt0;
+	u32 pcgctl;
+
+	dev_dbg(hsotg->dev, "Entering host clock gating.\n");
+
+	/* Put this port in suspend mode. */
+	hprt0 = dwc2_read_hprt0(hsotg);
+	hprt0 |= HPRT0_SUSP;
+	dwc2_writel(hsotg, hprt0, HPRT0);
+
+	/* Set the Phy Clock bit as suspend is received. */
+	pcgctl = dwc2_readl(hsotg, PCGCTL);
+	pcgctl |= PCGCTL_STOPPCLK;
+	dwc2_writel(hsotg, pcgctl, PCGCTL);
+	udelay(5);
+
+	/* Set the Gate hclk as suspend is received. */
+	pcgctl = dwc2_readl(hsotg, PCGCTL);
+	pcgctl |= PCGCTL_GATEHCLK;
+	dwc2_writel(hsotg, pcgctl, PCGCTL);
+	udelay(5);
+
+	hsotg->bus_suspended = true;
+	hsotg->lx_state = DWC2_L2;
+}
+
+/**
+ * dwc2_host_exit_clock_gating() - Exit controller from clock gating.
+ *
+ * @hsotg: Programming view of the DWC_otg controller
+ * @rem_wakeup: indicates whether resume is initiated by remote wakeup
+ *
+ * This function is for exiting Host mode clock gating.
+ */
+void dwc2_host_exit_clock_gating(struct dwc2_hsotg *hsotg, int rem_wakeup)
+{
+	u32 hprt0;
+	u32 pcgctl;
+
+	dev_dbg(hsotg->dev, "Exiting host clock gating.\n");
+
+	/* Clear the Gate hclk. */
+	pcgctl = dwc2_readl(hsotg, PCGCTL);
+	pcgctl &= ~PCGCTL_GATEHCLK;
+	dwc2_writel(hsotg, pcgctl, PCGCTL);
+	udelay(5);
+
+	/* Phy Clock bit. */
+	pcgctl = dwc2_readl(hsotg, PCGCTL);
+	pcgctl &= ~PCGCTL_STOPPCLK;
+	dwc2_writel(hsotg, pcgctl, PCGCTL);
+	udelay(5);
+
+	/* Drive resume signaling and exit suspend mode on the port. */
+	hprt0 = dwc2_read_hprt0(hsotg);
+	hprt0 |= HPRT0_RES;
+	hprt0 &= ~HPRT0_SUSP;
+	dwc2_writel(hsotg, hprt0, HPRT0);
+	udelay(5);
+
+	if (!rem_wakeup) {
+		/* In case of port resume need to wait for 40 ms */
+		msleep(USB_RESUME_TIMEOUT);
+
+		/* Stop driveing resume signaling on the port. */
+		hprt0 = dwc2_read_hprt0(hsotg);
+		hprt0 &= ~HPRT0_RES;
+		dwc2_writel(hsotg, hprt0, HPRT0);
+
+		hsotg->bus_suspended = false;
+		hsotg->lx_state = DWC2_L0;
+	} else {
+		mod_timer(&hsotg->wkp_timer,
+			  jiffies + msecs_to_jiffies(71));
+	}
 }

@@ -1,29 +1,28 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012 Samsung Electronics Co.Ltd
  * Authors:
  *	YoungJun Cho <yj44.cho@samsung.com>
  *	Eunchul Kim <chulspro.kim@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundationr
  */
 
-#include <linux/kernel.h>
+#include <linux/clk.h>
 #include <linux/component.h>
 #include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/kernel.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
-#include <linux/clk.h>
-#include <linux/of_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/sizes.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_fourcc.h>
 #include <drm/exynos_drm.h>
-#include "regs-rotator.h"
+
 #include "exynos_drm_drv.h"
 #include "exynos_drm_ipp.h"
+#include "regs-rotator.h"
 
 /*
  * Rotator supports image crop/rotator and input/output DMA operations.
@@ -57,6 +56,7 @@ struct rot_variant {
 struct rot_context {
 	struct exynos_drm_ipp ipp;
 	struct drm_device *drm_dev;
+	void		*dma_priv;
 	struct device	*dev;
 	void __iomem	*regs;
 	struct clk	*clock;
@@ -219,8 +219,13 @@ static int rotator_commit(struct exynos_drm_ipp *ipp,
 {
 	struct rot_context *rot =
 			container_of(ipp, struct rot_context, ipp);
+	int ret;
 
-	pm_runtime_get_sync(rot->dev);
+	ret = pm_runtime_resume_and_get(rot->dev);
+	if (ret < 0) {
+		dev_err(rot->dev, "failed to enable ROTATOR device.\n");
+		return ret;
+	}
 	rot->task = task;
 
 	rotator_src_set_fmt(rot, task->src.buf.fourcc);
@@ -244,7 +249,7 @@ static int rotator_bind(struct device *dev, struct device *master, void *data)
 
 	rot->drm_dev = drm_dev;
 	ipp->drm_dev = drm_dev;
-	exynos_drm_register_dma(drm_dev, dev);
+	exynos_drm_register_dma(drm_dev, dev, &rot->dma_priv);
 
 	exynos_drm_ipp_register(dev, ipp, &ipp_funcs,
 			   DRM_EXYNOS_IPP_CAP_CROP | DRM_EXYNOS_IPP_CAP_ROTATE,
@@ -262,7 +267,7 @@ static void rotator_unbind(struct device *dev, struct device *master,
 	struct exynos_drm_ipp *ipp = &rot->ipp;
 
 	exynos_drm_ipp_unregister(dev, ipp);
-	exynos_drm_unregister_dma(rot->drm_dev, rot->dev);
+	exynos_drm_unregister_dma(rot->drm_dev, rot->dev, &rot->dma_priv);
 }
 
 static const struct component_ops rotator_component_ops = {
@@ -273,7 +278,6 @@ static const struct component_ops rotator_component_ops = {
 static int rotator_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct resource	*regs_res;
 	struct rot_context *rot;
 	const struct rot_variant *variant;
 	int irq;
@@ -287,16 +291,13 @@ static int rotator_probe(struct platform_device *pdev)
 	rot->formats = variant->formats;
 	rot->num_formats = variant->num_formats;
 	rot->dev = dev;
-	regs_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	rot->regs = devm_ioremap_resource(dev, regs_res);
+	rot->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(rot->regs))
 		return PTR_ERR(rot->regs);
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(dev, "failed to get irq\n");
+	if (irq < 0)
 		return irq;
-	}
 
 	ret = devm_request_irq(dev, irq, rotator_irq_handler, 0, dev_name(dev),
 			       rot);
@@ -328,18 +329,15 @@ err_component:
 	return ret;
 }
 
-static int rotator_remove(struct platform_device *pdev)
+static void rotator_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 
 	component_del(dev, &rotator_component_ops);
 	pm_runtime_dont_use_autosuspend(dev);
 	pm_runtime_disable(dev);
-
-	return 0;
 }
 
-#ifdef CONFIG_PM
 static int rotator_runtime_suspend(struct device *dev)
 {
 	struct rot_context *rot = dev_get_drvdata(dev);
@@ -354,7 +352,6 @@ static int rotator_runtime_resume(struct device *dev)
 
 	return clk_prepare_enable(rot->clock);
 }
-#endif
 
 static const struct drm_exynos_ipp_limit rotator_s5pv210_rbg888_limits[] = {
 	{ IPP_SIZE_LIMIT(BUFFER, .h = { 8, SZ_16K }, .v = { 8, SZ_16K }) },
@@ -449,20 +446,15 @@ static const struct of_device_id exynos_rotator_match[] = {
 };
 MODULE_DEVICE_TABLE(of, exynos_rotator_match);
 
-static const struct dev_pm_ops rotator_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
-				pm_runtime_force_resume)
-	SET_RUNTIME_PM_OPS(rotator_runtime_suspend, rotator_runtime_resume,
-									NULL)
-};
+static DEFINE_RUNTIME_DEV_PM_OPS(rotator_pm_ops, rotator_runtime_suspend,
+				 rotator_runtime_resume, NULL);
 
 struct platform_driver rotator_driver = {
 	.probe		= rotator_probe,
-	.remove		= rotator_remove,
+	.remove_new	= rotator_remove,
 	.driver		= {
 		.name	= "exynos-rotator",
-		.owner	= THIS_MODULE,
-		.pm	= &rotator_pm_ops,
+		.pm	= pm_ptr(&rotator_pm_ops),
 		.of_match_table = exynos_rotator_match,
 	},
 };

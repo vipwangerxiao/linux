@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Device tree support
  *
@@ -7,20 +8,6 @@
  * Based on MIPS support for CONFIG_OF device tree support
  *
  * Copyright (C) 2010 Cisco Systems Inc. <dediao@cisco.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 
 #include <linux/init.h>
@@ -34,7 +21,8 @@
 
 void __init early_init_devtree(void *params)
 {
-	__be32 *dtb = (u32 *)__dtb_start;
+	__be32 __maybe_unused *dtb = (u32 *)__dtb_start;
+
 #if defined(CONFIG_NIOS2_DTB_AT_PHYS_ADDR)
 	if (be32_to_cpup((__be32 *)CONFIG_NIOS2_DTB_PHYS_ADDR) ==
 		 OF_DT_HEADER) {
@@ -43,8 +31,11 @@ void __init early_init_devtree(void *params)
 		return;
 	}
 #endif
+
+#ifdef CONFIG_NIOS2_DTB_SOURCE_BOOL
 	if (be32_to_cpu((__be32) *dtb) == OF_DT_HEADER)
 		params = (void *)__dtb_start;
+#endif
 
 	early_init_dt_scan(params);
 }

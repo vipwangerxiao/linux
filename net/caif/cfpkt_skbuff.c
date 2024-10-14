@@ -1,7 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) ST-Ericsson AB 2010
  * Author:	Sjur Brendeland
- * License terms: GNU General Public License (GPL) version 2
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ":%s(): " fmt, __func__
@@ -20,13 +20,6 @@ do {					   \
 	skb_reset_tail_pointer(&pkt->skb); \
 	pr_warn(errmsg);		   \
 } while (0)
-
-struct cfpktq {
-	struct sk_buff_head head;
-	atomic_t count;
-	/* Lock protects count updates */
-	spinlock_t lock;
-};
 
 /*
  * net/caif/ is generic and does not
@@ -305,10 +298,8 @@ struct cfpkt *cfpkt_append(struct cfpkt *dstpkt,
 	if (unlikely(is_erronous(dstpkt) || is_erronous(addpkt))) {
 		return dstpkt;
 	}
-	if (expectlen > addlen)
-		neededtailspace = expectlen;
-	else
-		neededtailspace = addlen;
+
+	neededtailspace = max(expectlen, addlen);
 
 	if (dst->tail + neededtailspace > dst->end) {
 		/* Create a dumplicate of 'dst' with more tail space */

@@ -1,15 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ACPI INT3403 thermal driver
  * Copyright (c) 2013, Intel Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
  */
 
 #include <linux/kernel.h>
@@ -31,17 +23,6 @@
 /* Preserved structure for future expandbility */
 struct int3403_sensor {
 	struct int34x_thermal_zone *int340x_zone;
-};
-
-struct int3403_performance_state {
-	u64 performance;
-	u64 power;
-	u64 latency;
-	u64 linear;
-	u64 control;
-	u64 raw_performace;
-	char *raw_unit;
-	int reserved;
 };
 
 struct int3403_cdev {
@@ -77,12 +58,12 @@ static void int3403_notify(acpi_handle handle,
 						   THERMAL_TRIP_VIOLATED);
 		break;
 	case INT3403_PERF_TRIP_POINT_CHANGED:
-		int340x_thermal_read_trips(obj->int340x_zone);
+		int340x_thermal_update_trips(obj->int340x_zone);
 		int340x_thermal_zone_device_update(obj->int340x_zone,
 						   THERMAL_TRIP_CHANGED);
 		break;
 	default:
-		dev_err(&priv->pdev->dev, "Unsupported event [0x%x]\n", event);
+		dev_dbg(&priv->pdev->dev, "Unsupported event [0x%x]\n", event);
 		break;
 	}
 }
@@ -189,7 +170,7 @@ static int int3403_cdev_add(struct int3403_priv *priv)
 
 	p = buf.pointer;
 	if (!p || (p->type != ACPI_TYPE_PACKAGE)) {
-		printk(KERN_WARNING "Invalid PPSS data\n");
+		pr_warn("Invalid PPSS data\n");
 		kfree(buf.pointer);
 		return -EFAULT;
 	}
@@ -220,6 +201,7 @@ static int int3403_add(struct platform_device *pdev)
 {
 	struct int3403_priv *priv;
 	int result = 0;
+	unsigned long long tmp;
 	acpi_status status;
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(struct int3403_priv),
@@ -234,19 +216,18 @@ static int int3403_add(struct platform_device *pdev)
 		goto err;
 	}
 
-	status = acpi_evaluate_integer(priv->adev->handle, "PTYP",
-				       NULL, &priv->type);
-	if (ACPI_FAILURE(status)) {
-		unsigned long long tmp;
 
-		status = acpi_evaluate_integer(priv->adev->handle, "_TMP",
-					       NULL, &tmp);
+	status = acpi_evaluate_integer(priv->adev->handle, "_TMP",
+				       NULL, &tmp);
+	if (ACPI_FAILURE(status)) {
+		status = acpi_evaluate_integer(priv->adev->handle, "PTYP",
+				       NULL, &priv->type);
 		if (ACPI_FAILURE(status)) {
 			result = -EINVAL;
 			goto err;
-		} else {
-			priv->type = INT3403_TYPE_SENSOR;
 		}
+	} else {
+		priv->type = INT3403_TYPE_SENSOR;
 	}
 
 	platform_set_drvdata(pdev, priv);
@@ -270,7 +251,7 @@ err:
 	return result;
 }
 
-static int int3403_remove(struct platform_device *pdev)
+static void int3403_remove(struct platform_device *pdev)
 {
 	struct int3403_priv *priv = platform_get_drvdata(pdev);
 
@@ -285,19 +266,22 @@ static int int3403_remove(struct platform_device *pdev)
 	default:
 		break;
 	}
-
-	return 0;
 }
 
 static const struct acpi_device_id int3403_device_ids[] = {
 	{"INT3403", 0},
+	{"INTC1043", 0},
+	{"INTC1046", 0},
+	{"INTC1062", 0},
+	{"INTC1069", 0},
+	{"INTC10A1", 0},
 	{"", 0},
 };
 MODULE_DEVICE_TABLE(acpi, int3403_device_ids);
 
 static struct platform_driver int3403_driver = {
 	.probe = int3403_add,
-	.remove = int3403_remove,
+	.remove_new = int3403_remove,
 	.driver = {
 		.name = "int3403 thermal",
 		.acpi_match_table = int3403_device_ids,

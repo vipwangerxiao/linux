@@ -1,16 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2012-2014 Mentor Graphics Inc.
  * Copyright (C) 2005-2009 Freescale Semiconductor, Inc.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
- * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * for more details.
  */
 #include <linux/export.h>
 #include <linux/module.h>
@@ -268,10 +259,24 @@ static int mbus_code_to_bus_cfg(struct ipu_csi_bus_config *cfg, u32 mbus_code,
 		cfg->data_width = IPU_CSI_DATA_WIDTH_8;
 		break;
 	case MEDIA_BUS_FMT_UYVY8_1X16:
-	case MEDIA_BUS_FMT_YUYV8_1X16:
-		cfg->data_fmt = CSI_SENS_CONF_DATA_FMT_BAYER;
+		if (mbus_type == V4L2_MBUS_BT656) {
+			cfg->data_fmt = CSI_SENS_CONF_DATA_FMT_YUV422_UYVY;
+			cfg->data_width = IPU_CSI_DATA_WIDTH_8;
+		} else {
+			cfg->data_fmt = CSI_SENS_CONF_DATA_FMT_BAYER;
+			cfg->data_width = IPU_CSI_DATA_WIDTH_16;
+		}
 		cfg->mipi_dt = MIPI_DT_YUV422;
-		cfg->data_width = IPU_CSI_DATA_WIDTH_16;
+		break;
+	case MEDIA_BUS_FMT_YUYV8_1X16:
+		if (mbus_type == V4L2_MBUS_BT656) {
+			cfg->data_fmt = CSI_SENS_CONF_DATA_FMT_YUV422_YUYV;
+			cfg->data_width = IPU_CSI_DATA_WIDTH_8;
+		} else {
+			cfg->data_fmt = CSI_SENS_CONF_DATA_FMT_BAYER;
+			cfg->data_width = IPU_CSI_DATA_WIDTH_16;
+		}
+		cfg->mipi_dt = MIPI_DT_YUV422;
 		break;
 	case MEDIA_BUS_FMT_SBGGR8_1X8:
 	case MEDIA_BUS_FMT_SGBRG8_1X8:
@@ -341,7 +346,7 @@ static int fill_csi_bus_cfg(struct ipu_csi_bus_config *csicfg,
 			    const struct v4l2_mbus_config *mbus_cfg,
 			    const struct v4l2_mbus_framefmt *mbus_fmt)
 {
-	int ret;
+	int ret, is_bt1120;
 
 	memset(csicfg, 0, sizeof(*csicfg));
 
@@ -352,21 +357,28 @@ static int fill_csi_bus_cfg(struct ipu_csi_bus_config *csicfg,
 	switch (mbus_cfg->type) {
 	case V4L2_MBUS_PARALLEL:
 		csicfg->ext_vsync = 1;
-		csicfg->vsync_pol = (mbus_cfg->flags &
+		csicfg->vsync_pol = (mbus_cfg->bus.parallel.flags &
 				     V4L2_MBUS_VSYNC_ACTIVE_LOW) ? 1 : 0;
-		csicfg->hsync_pol = (mbus_cfg->flags &
+		csicfg->hsync_pol = (mbus_cfg->bus.parallel.flags &
 				     V4L2_MBUS_HSYNC_ACTIVE_LOW) ? 1 : 0;
-		csicfg->pixclk_pol = (mbus_cfg->flags &
+		csicfg->pixclk_pol = (mbus_cfg->bus.parallel.flags &
 				      V4L2_MBUS_PCLK_SAMPLE_FALLING) ? 1 : 0;
 		csicfg->clk_mode = IPU_CSI_CLK_MODE_GATED_CLK;
 		break;
 	case V4L2_MBUS_BT656:
 		csicfg->ext_vsync = 0;
+		/* UYVY10_1X20 etc. should be supported as well */
+		is_bt1120 = mbus_fmt->code == MEDIA_BUS_FMT_UYVY8_1X16 ||
+			    mbus_fmt->code == MEDIA_BUS_FMT_YUYV8_1X16;
 		if (V4L2_FIELD_HAS_BOTH(mbus_fmt->field) ||
 		    mbus_fmt->field == V4L2_FIELD_ALTERNATE)
-			csicfg->clk_mode = IPU_CSI_CLK_MODE_CCIR656_INTERLACED;
+			csicfg->clk_mode = is_bt1120 ?
+				IPU_CSI_CLK_MODE_CCIR1120_INTERLACED_SDR :
+				IPU_CSI_CLK_MODE_CCIR656_INTERLACED;
 		else
-			csicfg->clk_mode = IPU_CSI_CLK_MODE_CCIR656_PROGRESSIVE;
+			csicfg->clk_mode = is_bt1120 ?
+				IPU_CSI_CLK_MODE_CCIR1120_PROGRESSIVE_SDR :
+				IPU_CSI_CLK_MODE_CCIR656_PROGRESSIVE;
 		break;
 	case V4L2_MBUS_CSI2_DPHY:
 		/*

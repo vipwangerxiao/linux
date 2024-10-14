@@ -1,22 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * cpc925_edac.c, EDAC driver for IBM CPC925 Bridge and Memory Controller.
  *
  * Copyright (c) 2008 Wind River Systems, Inc.
  *
  * Authors:	Cao Qingtao <qingtao.cao@windriver.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #include <linux/module.h>
@@ -809,7 +797,7 @@ static void cpc925_add_edac_devices(void __iomem *vbase)
 		dev_info->edac_idx = edac_device_alloc_index();
 		dev_info->edac_dev =
 			edac_device_alloc_ctl_info(0, dev_info->ctl_name,
-				1, NULL, 0, 0, NULL, 0, dev_info->edac_idx);
+				1, NULL, 0, 0, dev_info->edac_idx);
 		if (!dev_info->edac_dev) {
 			cpc925_printk(KERN_ERR, "No memory for edac device\n");
 			goto err1;
@@ -1022,7 +1010,7 @@ out:
 	return res;
 }
 
-static int cpc925_remove(struct platform_device *pdev)
+static void cpc925_remove(struct platform_device *pdev)
 {
 	struct mem_ctl_info *mci = platform_get_drvdata(pdev);
 
@@ -1035,13 +1023,11 @@ static int cpc925_remove(struct platform_device *pdev)
 
 	edac_mc_del_mc(&pdev->dev);
 	edac_mc_free(mci);
-
-	return 0;
 }
 
 static struct platform_driver cpc925_edac_driver = {
 	.probe = cpc925_probe,
-	.remove = cpc925_remove,
+	.remove_new = cpc925_remove,
 	.driver = {
 		   .name = "cpc925_edac",
 	}

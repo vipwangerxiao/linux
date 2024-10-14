@@ -1,11 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright (c) 2014 Mahesh Bandewar <maheshb@google.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of
- * the License, or (at your option) any later version.
- *
  */
 #ifndef __IPVLAN_H
 #define __IPVLAN_H
@@ -52,11 +47,11 @@ typedef enum {
 } ipvl_hdr_type;
 
 struct ipvl_pcpu_stats {
-	u64			rx_pkts;
-	u64			rx_bytes;
-	u64			rx_mcast;
-	u64			tx_pkts;
-	u64			tx_bytes;
+	u64_stats_t		rx_pkts;
+	u64_stats_t		rx_bytes;
+	u64_stats_t		rx_mcast;
+	u64_stats_t		tx_pkts;
+	u64_stats_t		tx_bytes;
 	struct u64_stats_sync	syncp;
 	u32			rx_errs;
 	u32			tx_drps;
@@ -103,6 +98,7 @@ struct ipvl_port {
 	struct sk_buff_head	backlog;
 	int			count;
 	struct ida		ida;
+	netdevice_tracker	dev_tracker;
 };
 
 struct ipvl_skb_cb {

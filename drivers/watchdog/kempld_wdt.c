@@ -1,17 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Kontron PLD watchdog driver
  *
  * Copyright (c) 2010-2013 Kontron Europe GmbH
  * Author: Michael Brunner <michael.brunner@kontron.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License 2 as published
- * by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * Note: From the PLD watchdog point of view timeout and pretimeout are
  *       defined differently than in the kernel.
@@ -83,9 +75,7 @@ struct kempld_wdt_data {
 	struct watchdog_device		wdd;
 	unsigned int			pretimeout;
 	struct kempld_wdt_stage		stage[KEMPLD_WDT_MAX_STAGES];
-#ifdef CONFIG_PM
 	u8				pm_status_store;
-#endif
 };
 
 #define DEFAULT_TIMEOUT		30 /* seconds */
@@ -503,7 +493,6 @@ static int kempld_wdt_probe(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM
 /* Disable watchdog if it is active during suspend */
 static int kempld_wdt_suspend(struct platform_device *pdev,
 				pm_message_t message)
@@ -539,18 +528,14 @@ static int kempld_wdt_resume(struct platform_device *pdev)
 	else
 		return kempld_wdt_stop(wdd);
 }
-#else
-#define kempld_wdt_suspend	NULL
-#define kempld_wdt_resume	NULL
-#endif
 
 static struct platform_driver kempld_wdt_driver = {
 	.driver		= {
 		.name	= "kempld-wdt",
 	},
 	.probe		= kempld_wdt_probe,
-	.suspend	= kempld_wdt_suspend,
-	.resume		= kempld_wdt_resume,
+	.suspend	= pm_ptr(kempld_wdt_suspend),
+	.resume		= pm_ptr(kempld_wdt_resume),
 };
 
 module_platform_driver(kempld_wdt_driver);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * AArch64 KGDB support
  *
@@ -5,18 +6,6 @@
  *
  * Copyright (C) 2013 Cavium Inc.
  * Author: Vijaya Kumar K <vijaya.kumar@caviumnetworks.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/bug.h>
@@ -28,6 +17,7 @@
 
 #include <asm/debug-monitors.h>
 #include <asm/insn.h>
+#include <asm/patching.h>
 #include <asm/traps.h>
 
 struct dbg_reg_def_t dbg_reg_def[DBG_MAX_REG_NUM] = {
@@ -234,6 +224,8 @@ int kgdb_arch_handle_exception(int exception_vector, int signo,
 		 */
 		if (!kernel_active_single_step())
 			kernel_enable_single_step(linux_regs);
+		else
+			kernel_rewind_single_step(linux_regs);
 		err = 0;
 		break;
 	default:
@@ -242,14 +234,14 @@ int kgdb_arch_handle_exception(int exception_vector, int signo,
 	return err;
 }
 
-static int kgdb_brk_fn(struct pt_regs *regs, unsigned int esr)
+static int kgdb_brk_fn(struct pt_regs *regs, unsigned long esr)
 {
 	kgdb_handle_exception(1, SIGTRAP, 0, regs);
 	return DBG_HOOK_HANDLED;
 }
 NOKPROBE_SYMBOL(kgdb_brk_fn)
 
-static int kgdb_compiled_brk_fn(struct pt_regs *regs, unsigned int esr)
+static int kgdb_compiled_brk_fn(struct pt_regs *regs, unsigned long esr)
 {
 	compiled_break = 1;
 	kgdb_handle_exception(1, SIGTRAP, 0, regs);
@@ -258,12 +250,12 @@ static int kgdb_compiled_brk_fn(struct pt_regs *regs, unsigned int esr)
 }
 NOKPROBE_SYMBOL(kgdb_compiled_brk_fn);
 
-static int kgdb_step_brk_fn(struct pt_regs *regs, unsigned int esr)
+static int kgdb_step_brk_fn(struct pt_regs *regs, unsigned long esr)
 {
 	if (!kgdb_single_step)
 		return DBG_HOOK_ERROR;
 
-	kgdb_handle_exception(1, SIGTRAP, 0, regs);
+	kgdb_handle_exception(0, SIGTRAP, 0, regs);
 	return DBG_HOOK_HANDLED;
 }
 NOKPROBE_SYMBOL(kgdb_step_brk_fn);

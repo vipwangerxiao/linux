@@ -14,9 +14,6 @@ static void mlx5_rdma_disable_roce_steering(struct mlx5_core_dev *dev)
 {
 	struct mlx5_core_roce *roce = &dev->priv.roce;
 
-	if (!roce->ft)
-		return;
-
 	mlx5_del_flow_rules(roce->allow_rule);
 	mlx5_destroy_flow_group(roce->fg);
 	mlx5_destroy_flow_table(roce->ft);
@@ -33,9 +30,8 @@ static int mlx5_rdma_enable_roce_steering(struct mlx5_core_dev *dev)
 	struct mlx5_flow_spec *spec;
 	struct mlx5_flow_table *ft;
 	struct mlx5_flow_group *fg;
-	void *match_criteria;
+	struct mlx5_eswitch *esw;
 	u32 *flow_group_in;
-	void *misc;
 	int err;
 
 	if (!(MLX5_CAP_FLOWTABLE_RDMA_RX(dev, ft_support) &&
@@ -51,7 +47,7 @@ static int mlx5_rdma_enable_roce_steering(struct mlx5_core_dev *dev)
 		return -ENOMEM;
 	}
 
-	ns = mlx5_get_flow_namespace(dev, MLX5_FLOW_NAMESPACE_RDMA_RX);
+	ns = mlx5_get_flow_namespace(dev, MLX5_FLOW_NAMESPACE_RDMA_RX_KERNEL);
 	if (!ns) {
 		mlx5_core_err(dev, "Failed to get RDMA RX namespace");
 		err = -EOPNOTSUPP;
@@ -66,12 +62,8 @@ static int mlx5_rdma_enable_roce_steering(struct mlx5_core_dev *dev)
 		goto free;
 	}
 
-	MLX5_SET(create_flow_group_in, flow_group_in, match_criteria_enable,
-		 MLX5_MATCH_MISC_PARAMETERS);
-	match_criteria = MLX5_ADDR_OF(create_flow_group_in, flow_group_in,
-				      match_criteria);
-	MLX5_SET_TO_ONES(fte_match_param, match_criteria,
-			 misc_parameters.source_port);
+	esw = dev->priv.eswitch;
+	mlx5_esw_set_flow_group_source_port(esw, flow_group_in, 0);
 
 	fg = mlx5_create_flow_group(ft, flow_group_in);
 	if (IS_ERR(fg)) {
@@ -80,14 +72,7 @@ static int mlx5_rdma_enable_roce_steering(struct mlx5_core_dev *dev)
 		goto destroy_flow_table;
 	}
 
-	spec->match_criteria_enable = MLX5_MATCH_MISC_PARAMETERS;
-	misc = MLX5_ADDR_OF(fte_match_param, spec->match_value,
-			    misc_parameters);
-	MLX5_SET(fte_match_set_misc, misc, source_port,
-		 dev->priv.eswitch->manager_vport);
-	misc = MLX5_ADDR_OF(fte_match_param, spec->match_criteria,
-			    misc_parameters);
-	MLX5_SET_TO_ONES(fte_match_set_misc, misc, source_port);
+	mlx5_esw_set_spec_source_port(esw, esw->manager_vport, spec);
 
 	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_ALLOW;
 	flow_rule = mlx5_add_flow_rules(ft, spec, &flow_act, NULL, 0);
@@ -106,10 +91,10 @@ static int mlx5_rdma_enable_roce_steering(struct mlx5_core_dev *dev)
 
 	return 0;
 
-destroy_flow_table:
-	mlx5_destroy_flow_table(ft);
 destroy_flow_group:
 	mlx5_destroy_flow_group(fg);
+destroy_flow_table:
+	mlx5_destroy_flow_table(ft);
 free:
 	kvfree(spec);
 	kvfree(flow_group_in);
@@ -118,15 +103,15 @@ free:
 
 static void mlx5_rdma_del_roce_addr(struct mlx5_core_dev *dev)
 {
-	mlx5_core_roce_gid_set(dev, 0, 0, 0,
-			       NULL, NULL, false, 0, 0);
+	mlx5_core_roce_gid_set(dev, 0, MLX5_ROCE_VERSION_2, 0,
+			       NULL, NULL, false, 0, 1);
 }
 
 static void mlx5_rdma_make_default_gid(struct mlx5_core_dev *dev, union ib_gid *gid)
 {
 	u8 hw_id[ETH_ALEN];
 
-	mlx5_query_nic_vport_mac_address(dev, 0, hw_id);
+	mlx5_query_mac_address(dev, hw_id);
 	gid->global.subnet_prefix = cpu_to_be64(0xfe80000000000000LL);
 	addrconf_addr_eui48(&gid->raw[8], hw_id);
 }
@@ -138,13 +123,18 @@ static int mlx5_rdma_add_roce_addr(struct mlx5_core_dev *dev)
 
 	mlx5_rdma_make_default_gid(dev, &gid);
 	return mlx5_core_roce_gid_set(dev, 0,
-				      MLX5_ROCE_VERSION_1,
+				      MLX5_ROCE_VERSION_2,
 				      0, gid.raw, mac,
 				      false, 0, 1);
 }
 
 void mlx5_rdma_disable_roce(struct mlx5_core_dev *dev)
 {
+	struct mlx5_core_roce *roce = &dev->priv.roce;
+
+	if (!roce->ft)
+		return;
+
 	mlx5_rdma_disable_roce_steering(dev);
 	mlx5_rdma_del_roce_addr(dev);
 	mlx5_nic_vport_disable_roce(dev);
@@ -153,6 +143,9 @@ void mlx5_rdma_disable_roce(struct mlx5_core_dev *dev)
 void mlx5_rdma_enable_roce(struct mlx5_core_dev *dev)
 {
 	int err;
+
+	if (!MLX5_CAP_GEN(dev, roce))
+		return;
 
 	err = mlx5_nic_vport_enable_roce(dev);
 	if (err) {
@@ -178,5 +171,4 @@ del_roce_addr:
 	mlx5_rdma_del_roce_addr(dev);
 disable_roce:
 	mlx5_nic_vport_disable_roce(dev);
-	return;
 }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * BCM63XX CFE image tag parser
  *
@@ -5,12 +6,6 @@
  *			  Mike Albon <malbon@openwrt.org>
  * Copyright © 2009-2010  Daniel Dickinson <openwrt@cshore.neomailbox.net>
  * Copyright © 2011-2013  Jonas Gorski <jonas.gorski@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -88,6 +83,7 @@ static int bcm963xx_parse_imagetag_partitions(struct mtd_info *master,
 			pr_err("invalid rootfs address: %*ph\n",
 				(int)sizeof(buf->flash_image_start),
 				buf->flash_image_start);
+			ret = -EINVAL;
 			goto out;
 		}
 
@@ -97,6 +93,7 @@ static int bcm963xx_parse_imagetag_partitions(struct mtd_info *master,
 			pr_err("invalid kernel address: %*ph\n",
 				(int)sizeof(buf->kernel_address),
 				buf->kernel_address);
+			ret = -EINVAL;
 			goto out;
 		}
 
@@ -105,6 +102,7 @@ static int bcm963xx_parse_imagetag_partitions(struct mtd_info *master,
 			pr_err("invalid kernel length: %*ph\n",
 				(int)sizeof(buf->kernel_length),
 				buf->kernel_length);
+			ret = -EINVAL;
 			goto out;
 		}
 
@@ -113,6 +111,7 @@ static int bcm963xx_parse_imagetag_partitions(struct mtd_info *master,
 			pr_err("invalid total length: %*ph\n",
 				(int)sizeof(buf->total_length),
 				buf->total_length);
+			ret = -EINVAL;
 			goto out;
 		}
 

@@ -202,6 +202,7 @@ static long sbwdog_ioctl(struct file *file, unsigned int cmd,
 		timeout = time;
 		sbwdog_set(user_dog, timeout);
 		sbwdog_pet(user_dog);
+		fallthrough;
 
 	case WDIOC_GETTIMEOUT:
 		/*
@@ -233,9 +234,9 @@ static int sbwdog_notify_sys(struct notifier_block *this, unsigned long code,
 
 static const struct file_operations sbwdog_fops = {
 	.owner		= THIS_MODULE,
-	.llseek		= no_llseek,
 	.write		= sbwdog_write,
 	.unlocked_ioctl	= sbwdog_ioctl,
+	.compat_ioctl	= compat_ptr_ioctl,
 	.open		= sbwdog_open,
 	.release	= sbwdog_release,
 };

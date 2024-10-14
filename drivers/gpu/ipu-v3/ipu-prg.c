@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2017 Lucas Stach, Pengutronix
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
  */
 
 #include <drm/drm_fourcc.h>
@@ -295,7 +287,7 @@ int ipu_prg_channel_configure(struct ipuv3_channel *ipu_chan,
 	chan = &prg->chan[prg_chan];
 
 	if (chan->enabled) {
-		ipu_pre_update(prg->pres[chan->used_pre], *eba);
+		ipu_pre_update(prg->pres[chan->used_pre], modifier, *eba);
 		return 0;
 	}
 
@@ -366,7 +358,6 @@ EXPORT_SYMBOL_GPL(ipu_prg_channel_configure_pending);
 static int ipu_prg_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct resource *res;
 	struct ipu_prg *prg;
 	u32 val;
 	int i, ret;
@@ -375,11 +366,9 @@ static int ipu_prg_probe(struct platform_device *pdev)
 	if (!prg)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	prg->regs = devm_ioremap_resource(&pdev->dev, res);
+	prg->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(prg->regs))
 		return PTR_ERR(prg->regs);
-
 
 	prg->clk_ipg = devm_clk_get(dev, "ipg");
 	if (IS_ERR(prg->clk_ipg))
@@ -430,15 +419,13 @@ static int ipu_prg_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int ipu_prg_remove(struct platform_device *pdev)
+static void ipu_prg_remove(struct platform_device *pdev)
 {
 	struct ipu_prg *prg = platform_get_drvdata(pdev);
 
 	mutex_lock(&ipu_prg_list_mutex);
 	list_del(&prg->list);
 	mutex_unlock(&ipu_prg_list_mutex);
-
-	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -482,7 +469,7 @@ static const struct of_device_id ipu_prg_dt_ids[] = {
 
 struct platform_driver ipu_prg_drv = {
 	.probe		= ipu_prg_probe,
-	.remove		= ipu_prg_remove,
+	.remove_new	= ipu_prg_remove,
 	.driver		= {
 		.name	= "imx-ipu-prg",
 		.pm	= &prg_pm_ops,

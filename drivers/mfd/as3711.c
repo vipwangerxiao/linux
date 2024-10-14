@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * AS3711 PMIC MFC driver
  *
  * Copyright (C) 2012 Renesas Electronics Corporation
  * Author: Guennadi Liakhovetski, <g.liakhovetski@gmx.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the version 2 of the GNU General Public License as
- * published by the Free Software Foundation
  */
 
 #include <linux/device.h>
@@ -109,7 +106,7 @@ static const struct regmap_config as3711_regmap_config = {
 	.precious_reg = as3711_precious_reg,
 	.max_register = AS3711_MAX_REG,
 	.num_reg_defaults_raw = AS3711_NUM_REGS,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 };
 
 #ifdef CONFIG_OF
@@ -119,8 +116,7 @@ static const struct of_device_id as3711_of_match[] = {
 };
 #endif
 
-static int as3711_i2c_probe(struct i2c_client *client,
-			    const struct i2c_device_id *id)
+static int as3711_i2c_probe(struct i2c_client *client)
 {
 	struct as3711 *as3711;
 	struct as3711_platform_data *pdata;

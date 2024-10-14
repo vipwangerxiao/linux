@@ -16,6 +16,7 @@
 #include <linux/clk.h>
 #include <linux/mfd/syscon.h>
 #include <linux/lcm.h>
+#include <linux/of.h>
 
 #include <sound/core.h>
 #include <sound/pcm.h>
@@ -99,6 +100,8 @@
 #define MCHP_I2SMCC_MRA_DATALENGTH_8_BITS_COMPACT	(7 << 1)
 
 #define MCHP_I2SMCC_MRA_WIRECFG_MASK		GENMASK(5, 4)
+#define MCHP_I2SMCC_MRA_WIRECFG_TDM(pin)	(((pin) << 4) & \
+						 MCHP_I2SMCC_MRA_WIRECFG_MASK)
 #define MCHP_I2SMCC_MRA_WIRECFG_I2S_1_TDM_0	(0 << 4)
 #define MCHP_I2SMCC_MRA_WIRECFG_I2S_2_TDM_1	(1 << 4)
 #define MCHP_I2SMCC_MRA_WIRECFG_I2S_4_TDM_2	(2 << 4)
@@ -173,7 +176,7 @@
  */
 #define MCHP_I2SMCC_MRB_CRAMODE_REGULAR		(1 << 0)
 
-#define MCHP_I2SMCC_MRB_FIFOEN			BIT(1)
+#define MCHP_I2SMCC_MRB_FIFOEN			BIT(4)
 
 #define MCHP_I2SMCC_MRB_DMACHUNK_MASK		GENMASK(9, 8)
 #define MCHP_I2SMCC_MRB_DMACHUNK(no_words) \
@@ -218,11 +221,25 @@
 #define MCHP_I2SMCC_MAX_CHANNELS		8
 #define MCHP_I2MCC_TDM_SLOT_WIDTH		32
 
+/*
+ * ---- DMA chunk size allowed ----
+ */
+#define MCHP_I2SMCC_DMA_8_WORD_CHUNK			8
+#define MCHP_I2SMCC_DMA_4_WORD_CHUNK			4
+#define MCHP_I2SMCC_DMA_2_WORD_CHUNK			2
+#define MCHP_I2SMCC_DMA_1_WORD_CHUNK			1
+#define DMA_BURST_ALIGNED(_p, _s, _w)		!(_p % (_s * _w))
+
 static const struct regmap_config mchp_i2s_mcc_regmap_config = {
 	.reg_bits = 32,
 	.reg_stride = 4,
 	.val_bits = 32,
 	.max_register = MCHP_I2SMCC_VERSION,
+};
+
+struct mchp_i2s_mcc_soc_data {
+	unsigned int	data_pin_pair_num;
+	bool		has_fifo;
 };
 
 struct mchp_i2s_mcc_dev {
@@ -232,6 +249,7 @@ struct mchp_i2s_mcc_dev {
 	struct regmap				*regmap;
 	struct clk				*pclk;
 	struct clk				*gclk;
+	const struct mchp_i2s_mcc_soc_data	*soc;
 	struct snd_dmaengine_dai_dma_data	playback;
 	struct snd_dmaengine_dai_dma_data	capture;
 	unsigned int				fmt;
@@ -239,16 +257,17 @@ struct mchp_i2s_mcc_dev {
 	unsigned int				frame_length;
 	int					tdm_slots;
 	int					channels;
-	int					gclk_use:1;
-	int					gclk_running:1;
-	int					tx_rdy:1;
-	int					rx_rdy:1;
+	u8					tdm_data_pair;
+	unsigned int				gclk_use:1;
+	unsigned int				gclk_running:1;
+	unsigned int				tx_rdy:1;
+	unsigned int				rx_rdy:1;
 };
 
 static irqreturn_t mchp_i2s_mcc_interrupt(int irq, void *dev_id)
 {
 	struct mchp_i2s_mcc_dev *dev = dev_id;
-	u32 sra, imra, srb, imrb, pendinga, pendingb, idra = 0;
+	u32 sra, imra, srb, imrb, pendinga, pendingb, idra = 0, idrb = 0;
 	irqreturn_t ret = IRQ_NONE;
 
 	regmap_read(dev->regmap, MCHP_I2SMCC_IMRA, &imra);
@@ -266,24 +285,36 @@ static irqreturn_t mchp_i2s_mcc_interrupt(int irq, void *dev_id)
 	 * Tx/Rx ready interrupts are enabled when stopping only, to assure
 	 * availability and to disable clocks if necessary
 	 */
-	idra |= pendinga & (MCHP_I2SMCC_INT_TXRDY_MASK(dev->channels) |
-			    MCHP_I2SMCC_INT_RXRDY_MASK(dev->channels));
-	if (idra)
+	if (dev->soc->has_fifo) {
+		idrb |= pendingb & (MCHP_I2SMCC_INT_TXFFRDY |
+				    MCHP_I2SMCC_INT_RXFFRDY);
+	} else {
+		idra |= pendinga & (MCHP_I2SMCC_INT_TXRDY_MASK(dev->channels) |
+				    MCHP_I2SMCC_INT_RXRDY_MASK(dev->channels));
+	}
+	if (idra || idrb)
 		ret = IRQ_HANDLED;
 
-	if ((imra & MCHP_I2SMCC_INT_TXRDY_MASK(dev->channels)) &&
-	    (imra & MCHP_I2SMCC_INT_TXRDY_MASK(dev->channels)) ==
-	    (idra & MCHP_I2SMCC_INT_TXRDY_MASK(dev->channels))) {
+	if ((!dev->soc->has_fifo &&
+	     (imra & MCHP_I2SMCC_INT_TXRDY_MASK(dev->channels)) &&
+	     (imra & MCHP_I2SMCC_INT_TXRDY_MASK(dev->channels)) ==
+	     (idra & MCHP_I2SMCC_INT_TXRDY_MASK(dev->channels))) ||
+	    (dev->soc->has_fifo && imrb & MCHP_I2SMCC_INT_TXFFRDY)) {
 		dev->tx_rdy = 1;
 		wake_up_interruptible(&dev->wq_txrdy);
 	}
-	if ((imra & MCHP_I2SMCC_INT_RXRDY_MASK(dev->channels)) &&
-	    (imra & MCHP_I2SMCC_INT_RXRDY_MASK(dev->channels)) ==
-	    (idra & MCHP_I2SMCC_INT_RXRDY_MASK(dev->channels))) {
+	if ((!dev->soc->has_fifo &&
+	     (imra & MCHP_I2SMCC_INT_RXRDY_MASK(dev->channels)) &&
+	     (imra & MCHP_I2SMCC_INT_RXRDY_MASK(dev->channels)) ==
+	     (idra & MCHP_I2SMCC_INT_RXRDY_MASK(dev->channels))) ||
+	    (dev->soc->has_fifo && imrb & MCHP_I2SMCC_INT_RXFFRDY)) {
 		dev->rx_rdy = 1;
 		wake_up_interruptible(&dev->wq_rxrdy);
 	}
-	regmap_write(dev->regmap, MCHP_I2SMCC_IDRA, idra);
+	if (dev->soc->has_fifo)
+		regmap_write(dev->regmap, MCHP_I2SMCC_IDRB, idrb);
+	else
+		regmap_write(dev->regmap, MCHP_I2SMCC_IDRA, idra);
 
 	return ret;
 }
@@ -328,7 +359,7 @@ static int mchp_i2s_mcc_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 		return -EINVAL;
 
 	/* We can't generate only FSYNC */
-	if ((fmt & SND_SOC_DAIFMT_MASTER_MASK) == SND_SOC_DAIFMT_CBM_CFS)
+	if ((fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) == SND_SOC_DAIFMT_BC_FP)
 		return -EINVAL;
 
 	/* We can only reconfigure the IP when it's stopped */
@@ -392,11 +423,11 @@ static int mchp_i2s_mcc_clk_get_rate_diff(struct clk *clk,
 }
 
 static int mchp_i2s_mcc_config_divs(struct mchp_i2s_mcc_dev *dev,
-				    unsigned int bclk, unsigned int *mra)
+				    unsigned int bclk, unsigned int *mra,
+				    unsigned long *best_rate)
 {
 	unsigned long clk_rate;
 	unsigned long lcm_rate;
-	unsigned long best_rate = 0;
 	unsigned long best_diff_rate = ~0;
 	unsigned int sysclk;
 	struct clk *best_clk = NULL;
@@ -423,7 +454,7 @@ static int mchp_i2s_mcc_config_divs(struct mchp_i2s_mcc_dev *dev,
 	     (clk_rate == bclk || clk_rate / (bclk * 2) <= GENMASK(5, 0));
 	     clk_rate += lcm_rate) {
 		ret = mchp_i2s_mcc_clk_get_rate_diff(dev->gclk, clk_rate,
-						     &best_clk, &best_rate,
+						     &best_clk, best_rate,
 						     &best_diff_rate);
 		if (ret) {
 			dev_err(dev->dev, "gclk error for rate %lu: %d",
@@ -437,7 +468,7 @@ static int mchp_i2s_mcc_config_divs(struct mchp_i2s_mcc_dev *dev,
 		}
 
 		ret = mchp_i2s_mcc_clk_get_rate_diff(dev->pclk, clk_rate,
-						     &best_clk, &best_rate,
+						     &best_clk, best_rate,
 						     &best_diff_rate);
 		if (ret) {
 			dev_err(dev->dev, "pclk error for rate %lu: %d",
@@ -459,33 +490,17 @@ static int mchp_i2s_mcc_config_divs(struct mchp_i2s_mcc_dev *dev,
 
 	dev_dbg(dev->dev, "source CLK is %s with rate %lu, diff %lu\n",
 		best_clk == dev->pclk ? "pclk" : "gclk",
-		best_rate, best_diff_rate);
-
-	/* set the rate */
-	ret = clk_set_rate(best_clk, best_rate);
-	if (ret) {
-		dev_err(dev->dev, "unable to set rate %lu to %s: %d\n",
-			best_rate, best_clk == dev->pclk ? "PCLK" : "GCLK",
-			ret);
-		return ret;
-	}
+		*best_rate, best_diff_rate);
 
 	/* Configure divisors */
 	if (dev->sysclk)
-		*mra |= MCHP_I2SMCC_MRA_IMCKDIV(best_rate / (2 * sysclk));
-	*mra |= MCHP_I2SMCC_MRA_ISCKDIV(best_rate / (2 * bclk));
+		*mra |= MCHP_I2SMCC_MRA_IMCKDIV(*best_rate / (2 * sysclk));
+	*mra |= MCHP_I2SMCC_MRA_ISCKDIV(*best_rate / (2 * bclk));
 
-	if (best_clk == dev->gclk) {
+	if (best_clk == dev->gclk)
 		*mra |= MCHP_I2SMCC_MRA_SRCCLK_GCLK;
-		ret = clk_prepare(dev->gclk);
-		if (ret < 0)
-			dev_err(dev->dev, "unable to prepare GCLK: %d\n", ret);
-		else
-			dev->gclk_use = 1;
-	} else {
+	else
 		*mra |= MCHP_I2SMCC_MRA_SRCCLK_PCLK;
-		dev->gclk_use = 0;
-	}
 
 	return 0;
 }
@@ -498,11 +513,30 @@ static int mchp_i2s_mcc_is_running(struct mchp_i2s_mcc_dev *dev)
 	return !!(sr & (MCHP_I2SMCC_SR_TXEN | MCHP_I2SMCC_SR_RXEN));
 }
 
+static inline int mchp_i2s_mcc_period_to_maxburst(int period_size, int sample_size)
+{
+	int p_size = period_size;
+	int s_size = sample_size;
+
+	if (DMA_BURST_ALIGNED(p_size, s_size, MCHP_I2SMCC_DMA_8_WORD_CHUNK))
+		return MCHP_I2SMCC_DMA_8_WORD_CHUNK;
+	if (DMA_BURST_ALIGNED(p_size, s_size, MCHP_I2SMCC_DMA_4_WORD_CHUNK))
+		return MCHP_I2SMCC_DMA_4_WORD_CHUNK;
+	if (DMA_BURST_ALIGNED(p_size, s_size, MCHP_I2SMCC_DMA_2_WORD_CHUNK))
+		return MCHP_I2SMCC_DMA_2_WORD_CHUNK;
+	return MCHP_I2SMCC_DMA_1_WORD_CHUNK;
+}
+
 static int mchp_i2s_mcc_hw_params(struct snd_pcm_substream *substream,
 				  struct snd_pcm_hw_params *params,
 				  struct snd_soc_dai *dai)
 {
+	unsigned long rate = 0;
 	struct mchp_i2s_mcc_dev *dev = snd_soc_dai_get_drvdata(dai);
+	int sample_bytes = params_physical_width(params) / 8;
+	int period_bytes = params_period_size(params) *
+		params_channels(params) * sample_bytes;
+	int maxburst;
 	u32 mra = 0;
 	u32 mrb = 0;
 	unsigned int channels = params_channels(params);
@@ -512,9 +546,9 @@ static int mchp_i2s_mcc_hw_params(struct snd_pcm_substream *substream,
 	int ret;
 	bool is_playback = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK);
 
-	dev_dbg(dev->dev, "%s() rate=%u format=%#x width=%u channels=%u\n",
+	dev_dbg(dev->dev, "%s() rate=%u format=%#x width=%u channels=%u period_bytes=%d\n",
 		__func__, params_rate(params), params_format(params),
-		params_width(params), params_channels(params));
+		params_width(params), params_channels(params), period_bytes);
 
 	switch (dev->fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
 	case SND_SOC_DAIFMT_I2S:
@@ -539,20 +573,20 @@ static int mchp_i2s_mcc_hw_params(struct snd_pcm_substream *substream,
 		return -EINVAL;
 	}
 
-	switch (dev->fmt & SND_SOC_DAIFMT_MASTER_MASK) {
-	case SND_SOC_DAIFMT_CBS_CFS:
+	switch (dev->fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
+	case SND_SOC_DAIFMT_BP_FP:
 		/* cpu is BCLK and LRC master */
 		mra |= MCHP_I2SMCC_MRA_MODE_MASTER;
 		if (dev->sysclk)
 			mra |= MCHP_I2SMCC_MRA_IMCKMODE_GEN;
 		set_divs = 1;
 		break;
-	case SND_SOC_DAIFMT_CBS_CFM:
+	case SND_SOC_DAIFMT_BP_FC:
 		/* cpu is BCLK master */
 		mrb |= MCHP_I2SMCC_MRB_CLKSEL_INT;
 		set_divs = 1;
-		/* fall through */
-	case SND_SOC_DAIFMT_CBM_CFM:
+		fallthrough;
+	case SND_SOC_DAIFMT_BC_FC:
 		/* cpu is slave */
 		mra |= MCHP_I2SMCC_MRA_MODE_SLAVE;
 		if (dev->sysclk)
@@ -564,6 +598,17 @@ static int mchp_i2s_mcc_hw_params(struct snd_pcm_substream *substream,
 	}
 
 	if (dev->fmt & (SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_LEFT_J)) {
+		/* for I2S and LEFT_J one pin is needed for every 2 channels */
+		if (channels > dev->soc->data_pin_pair_num * 2) {
+			dev_err(dev->dev,
+				"unsupported number of audio channels: %d\n",
+				channels);
+			return -EINVAL;
+		}
+
+		/* enable for interleaved format */
+		mrb |= MCHP_I2SMCC_MRB_CRAMODE_REGULAR;
+
 		switch (channels) {
 		case 1:
 			if (is_playback)
@@ -573,6 +618,12 @@ static int mchp_i2s_mcc_hw_params(struct snd_pcm_substream *substream,
 			break;
 		case 2:
 			break;
+		case 4:
+			mra |= MCHP_I2SMCC_MRA_WIRECFG_I2S_2_TDM_1;
+			break;
+		case 8:
+			mra |= MCHP_I2SMCC_MRA_WIRECFG_I2S_4_TDM_2;
+			break;
 		default:
 			dev_err(dev->dev, "unsupported number of audio channels\n");
 			return -EINVAL;
@@ -581,6 +632,8 @@ static int mchp_i2s_mcc_hw_params(struct snd_pcm_substream *substream,
 		if (!frame_length)
 			frame_length = 2 * params_physical_width(params);
 	} else if (dev->fmt & SND_SOC_DAIFMT_DSP_A) {
+		mra |= MCHP_I2SMCC_MRA_WIRECFG_TDM(dev->tdm_data_pair);
+
 		if (dev->tdm_slots) {
 			if (channels % 2 && channels * 2 <= dev->tdm_slots) {
 				/*
@@ -604,11 +657,12 @@ static int mchp_i2s_mcc_hw_params(struct snd_pcm_substream *substream,
 	 * We must have the same burst size configured
 	 * in the DMA transfer and in out IP
 	 */
-	mrb |= MCHP_I2SMCC_MRB_DMACHUNK(channels);
+	maxburst = mchp_i2s_mcc_period_to_maxburst(period_bytes, sample_bytes);
+	mrb |= MCHP_I2SMCC_MRB_DMACHUNK(maxburst);
 	if (is_playback)
-		dev->playback.maxburst = 1 << (fls(channels) - 1);
+		dev->playback.maxburst = maxburst;
 	else
-		dev->capture.maxburst = 1 << (fls(channels) - 1);
+		dev->capture.maxburst = maxburst;
 
 	switch (params_format(params)) {
 	case SNDRV_PCM_FORMAT_S8:
@@ -640,6 +694,21 @@ static int mchp_i2s_mcc_hw_params(struct snd_pcm_substream *substream,
 		return -EINVAL;
 	}
 
+	if (set_divs) {
+		bclk_rate = frame_length * params_rate(params);
+		ret = mchp_i2s_mcc_config_divs(dev, bclk_rate, &mra,
+					       &rate);
+		if (ret) {
+			dev_err(dev->dev,
+				"unable to configure the divisors: %d\n", ret);
+			return ret;
+		}
+	}
+
+	/* enable FIFO if available */
+	if (dev->soc->has_fifo)
+		mrb |= MCHP_I2SMCC_MRB_FIFOEN;
+
 	/*
 	 * If we are already running, the wanted setup must be
 	 * the same with the one that's currently ongoing
@@ -656,22 +725,35 @@ static int mchp_i2s_mcc_hw_params(struct snd_pcm_substream *substream,
 		return 0;
 	}
 
+	if (mra & MCHP_I2SMCC_MRA_SRCCLK_GCLK && !dev->gclk_use) {
+		/* set the rate */
+		ret = clk_set_rate(dev->gclk, rate);
+		if (ret) {
+			dev_err(dev->dev,
+				"unable to set rate %lu to GCLK: %d\n",
+				rate, ret);
+			return ret;
+		}
+
+		ret = clk_prepare(dev->gclk);
+		if (ret < 0) {
+			dev_err(dev->dev, "unable to prepare GCLK: %d\n", ret);
+			return ret;
+		}
+		dev->gclk_use = 1;
+	}
+
 	/* Save the number of channels to know what interrupts to enable */
 	dev->channels = channels;
 
-	if (set_divs) {
-		bclk_rate = frame_length * params_rate(params);
-		ret = mchp_i2s_mcc_config_divs(dev, bclk_rate, &mra);
-		if (ret) {
-			dev_err(dev->dev, "unable to configure the divisors: %d\n",
-				ret);
-			return ret;
-		}
-	}
-
 	ret = regmap_write(dev->regmap, MCHP_I2SMCC_MRA, mra);
-	if (ret < 0)
+	if (ret < 0) {
+		if (dev->gclk_use) {
+			clk_unprepare(dev->gclk);
+			dev->gclk_use = 0;
+		}
 		return ret;
+	}
 	return regmap_write(dev->regmap, MCHP_I2SMCC_MRB, mrb);
 }
 
@@ -686,30 +768,45 @@ static int mchp_i2s_mcc_hw_free(struct snd_pcm_substream *substream,
 		err = wait_event_interruptible_timeout(dev->wq_txrdy,
 						       dev->tx_rdy,
 						       msecs_to_jiffies(500));
+		if (err == 0) {
+			dev_warn_once(dev->dev,
+				      "Timeout waiting for Tx ready\n");
+			if (dev->soc->has_fifo)
+				regmap_write(dev->regmap, MCHP_I2SMCC_IDRB,
+					     MCHP_I2SMCC_INT_TXFFRDY);
+			else
+				regmap_write(dev->regmap, MCHP_I2SMCC_IDRA,
+					     MCHP_I2SMCC_INT_TXRDY_MASK(dev->channels));
+
+			dev->tx_rdy = 1;
+		}
 	} else {
 		err = wait_event_interruptible_timeout(dev->wq_rxrdy,
 						       dev->rx_rdy,
 						       msecs_to_jiffies(500));
-	}
-
-	if (err == 0) {
-		u32 idra;
-
-		dev_warn_once(dev->dev, "Timeout waiting for %s\n",
-			      is_playback ? "Tx ready" : "Rx ready");
-		if (is_playback)
-			idra = MCHP_I2SMCC_INT_TXRDY_MASK(dev->channels);
-		else
-			idra = MCHP_I2SMCC_INT_RXRDY_MASK(dev->channels);
-		regmap_write(dev->regmap, MCHP_I2SMCC_IDRA, idra);
+		if (err == 0) {
+			dev_warn_once(dev->dev,
+				      "Timeout waiting for Rx ready\n");
+			if (dev->soc->has_fifo)
+				regmap_write(dev->regmap, MCHP_I2SMCC_IDRB,
+					     MCHP_I2SMCC_INT_RXFFRDY);
+			else
+				regmap_write(dev->regmap, MCHP_I2SMCC_IDRA,
+					     MCHP_I2SMCC_INT_RXRDY_MASK(dev->channels));
+			dev->rx_rdy = 1;
+		}
 	}
 
 	if (!mchp_i2s_mcc_is_running(dev)) {
 		regmap_write(dev->regmap, MCHP_I2SMCC_CR, MCHP_I2SMCC_CR_CKDIS);
 
 		if (dev->gclk_running) {
-			clk_disable_unprepare(dev->gclk);
+			clk_disable(dev->gclk);
 			dev->gclk_running = 0;
+		}
+		if (dev->gclk_use) {
+			clk_unprepare(dev->gclk);
+			dev->gclk_use = 0;
 		}
 	}
 
@@ -722,7 +819,7 @@ static int mchp_i2s_mcc_trigger(struct snd_pcm_substream *substream, int cmd,
 	struct mchp_i2s_mcc_dev *dev = snd_soc_dai_get_drvdata(dai);
 	bool is_playback = (substream->stream == SNDRV_PCM_STREAM_PLAYBACK);
 	u32 cr = 0;
-	u32 iera = 0;
+	u32 iera = 0, ierb = 0;
 	u32 sr;
 	int err;
 
@@ -746,7 +843,10 @@ static int mchp_i2s_mcc_trigger(struct snd_pcm_substream *substream, int cmd,
 			 * Enable Tx Ready interrupts on all channels
 			 * to assure all data is sent
 			 */
-			iera = MCHP_I2SMCC_INT_TXRDY_MASK(dev->channels);
+			if (dev->soc->has_fifo)
+				ierb = MCHP_I2SMCC_INT_TXFFRDY;
+			else
+				iera = MCHP_I2SMCC_INT_TXRDY_MASK(dev->channels);
 		} else if (!is_playback && (sr & MCHP_I2SMCC_SR_RXEN)) {
 			cr = MCHP_I2SMCC_CR_RXDIS;
 			dev->rx_rdy = 0;
@@ -754,7 +854,10 @@ static int mchp_i2s_mcc_trigger(struct snd_pcm_substream *substream, int cmd,
 			 * Enable Rx Ready interrupts on all channels
 			 * to assure all data is received
 			 */
-			iera = MCHP_I2SMCC_INT_RXRDY_MASK(dev->channels);
+			if (dev->soc->has_fifo)
+				ierb = MCHP_I2SMCC_INT_RXFFRDY;
+			else
+				iera = MCHP_I2SMCC_INT_RXRDY_MASK(dev->channels);
 		}
 		break;
 	default:
@@ -772,7 +875,10 @@ static int mchp_i2s_mcc_trigger(struct snd_pcm_substream *substream, int cmd,
 		}
 	}
 
-	regmap_write(dev->regmap, MCHP_I2SMCC_IERA, iera);
+	if (dev->soc->has_fifo)
+		regmap_write(dev->regmap, MCHP_I2SMCC_IERB, ierb);
+	else
+		regmap_write(dev->regmap, MCHP_I2SMCC_IERA, iera);
 	regmap_write(dev->regmap, MCHP_I2SMCC_CR, cr);
 
 	return 0;
@@ -792,9 +898,24 @@ static int mchp_i2s_mcc_startup(struct snd_pcm_substream *substream,
 	return 0;
 }
 
+static int mchp_i2s_mcc_dai_probe(struct snd_soc_dai *dai)
+{
+	struct mchp_i2s_mcc_dev *dev = snd_soc_dai_get_drvdata(dai);
+
+	init_waitqueue_head(&dev->wq_txrdy);
+	init_waitqueue_head(&dev->wq_rxrdy);
+	dev->tx_rdy = 1;
+	dev->rx_rdy = 1;
+
+	snd_soc_dai_init_dma_data(dai, &dev->playback, &dev->capture);
+
+	return 0;
+}
+
 static const struct snd_soc_dai_ops mchp_i2s_mcc_dai_ops = {
+	.probe		= mchp_i2s_mcc_dai_probe,
 	.set_sysclk	= mchp_i2s_mcc_set_sysclk,
-	.set_bclk_ratio = mchp_i2s_mcc_set_bclk_ratio,
+	.set_bclk_ratio	= mchp_i2s_mcc_set_bclk_ratio,
 	.startup	= mchp_i2s_mcc_startup,
 	.trigger	= mchp_i2s_mcc_trigger,
 	.hw_params	= mchp_i2s_mcc_hw_params,
@@ -802,18 +923,6 @@ static const struct snd_soc_dai_ops mchp_i2s_mcc_dai_ops = {
 	.set_fmt	= mchp_i2s_mcc_set_dai_fmt,
 	.set_tdm_slot	= mchp_i2s_mcc_set_dai_tdm_slot,
 };
-
-static int mchp_i2s_mcc_dai_probe(struct snd_soc_dai *dai)
-{
-	struct mchp_i2s_mcc_dev *dev = snd_soc_dai_get_drvdata(dai);
-
-	init_waitqueue_head(&dev->wq_txrdy);
-	init_waitqueue_head(&dev->wq_rxrdy);
-
-	snd_soc_dai_init_dma_data(dai, &dev->playback, &dev->capture);
-
-	return 0;
-}
 
 #define MCHP_I2SMCC_RATES              SNDRV_PCM_RATE_8000_192000
 
@@ -826,40 +935,93 @@ static int mchp_i2s_mcc_dai_probe(struct snd_soc_dai *dai)
 				 SNDRV_PCM_FMTBIT_S32_LE)
 
 static struct snd_soc_dai_driver mchp_i2s_mcc_dai = {
-	.probe	= mchp_i2s_mcc_dai_probe,
 	.playback = {
-		.stream_name = "I2SMCC-Playback",
+		.stream_name = "Playback",
 		.channels_min = 1,
 		.channels_max = 8,
 		.rates = MCHP_I2SMCC_RATES,
 		.formats = MCHP_I2SMCC_FORMATS,
 	},
 	.capture = {
-		.stream_name = "I2SMCC-Capture",
+		.stream_name = "Capture",
 		.channels_min = 1,
 		.channels_max = 8,
 		.rates = MCHP_I2SMCC_RATES,
 		.formats = MCHP_I2SMCC_FORMATS,
 	},
 	.ops = &mchp_i2s_mcc_dai_ops,
-	.symmetric_rates = 1,
-	.symmetric_samplebits = 1,
+	.symmetric_rate = 1,
+	.symmetric_sample_bits = 1,
 	.symmetric_channels = 1,
 };
 
 static const struct snd_soc_component_driver mchp_i2s_mcc_component = {
-	.name	= "mchp-i2s-mcc",
+	.name			= "mchp-i2s-mcc",
+	.legacy_dai_naming	= 1,
 };
 
 #ifdef CONFIG_OF
+static struct mchp_i2s_mcc_soc_data mchp_i2s_mcc_sam9x60 = {
+	.data_pin_pair_num = 1,
+};
+
+static struct mchp_i2s_mcc_soc_data mchp_i2s_mcc_sama7g5 = {
+	.data_pin_pair_num = 4,
+	.has_fifo = true,
+};
+
 static const struct of_device_id mchp_i2s_mcc_dt_ids[] = {
 	{
 		.compatible = "microchip,sam9x60-i2smcc",
+		.data = &mchp_i2s_mcc_sam9x60,
+	},
+	{
+		.compatible = "microchip,sama7g5-i2smcc",
+		.data = &mchp_i2s_mcc_sama7g5,
 	},
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, mchp_i2s_mcc_dt_ids);
 #endif
+
+static int mchp_i2s_mcc_soc_data_parse(struct platform_device *pdev,
+				       struct mchp_i2s_mcc_dev *dev)
+{
+	int err;
+
+	if (!dev->soc) {
+		dev_err(&pdev->dev, "failed to get soc data\n");
+		return -ENODEV;
+	}
+
+	if (dev->soc->data_pin_pair_num == 1)
+		return 0;
+
+	err = of_property_read_u8(pdev->dev.of_node, "microchip,tdm-data-pair",
+				  &dev->tdm_data_pair);
+	if (err < 0 && err != -EINVAL) {
+		dev_err(&pdev->dev,
+			"bad property data for 'microchip,tdm-data-pair': %d",
+			err);
+		return err;
+	}
+	if (err == -EINVAL) {
+		dev_info(&pdev->dev,
+			 "'microchip,tdm-data-pair' not found; assuming DIN/DOUT 0 for TDM\n");
+		dev->tdm_data_pair = 0;
+	} else {
+		if (dev->tdm_data_pair > dev->soc->data_pin_pair_num - 1) {
+			dev_err(&pdev->dev,
+				"invalid value for 'microchip,tdm-data-pair': %d\n",
+				dev->tdm_data_pair);
+			return -EINVAL;
+		}
+		dev_dbg(&pdev->dev, "TMD format on DIN/DOUT %d pins\n",
+			dev->tdm_data_pair);
+	}
+
+	return 0;
+}
 
 static int mchp_i2s_mcc_probe(struct platform_device *pdev)
 {
@@ -875,8 +1037,7 @@ static int mchp_i2s_mcc_probe(struct platform_device *pdev)
 	if (!dev)
 		return -ENOMEM;
 
-	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	base = devm_ioremap_resource(&pdev->dev, mem);
+	base = devm_platform_get_and_ioremap_resource(pdev, 0, &mem);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
@@ -911,6 +1072,11 @@ static int mchp_i2s_mcc_probe(struct platform_device *pdev)
 			 "generated clock not found: %d\n", err);
 		dev->gclk = NULL;
 	}
+
+	dev->soc = of_device_get_match_data(&pdev->dev);
+	err = mchp_i2s_mcc_soc_data_parse(pdev, dev);
+	if (err < 0)
+		return err;
 
 	dev->dev = &pdev->dev;
 	dev->regmap = regmap;
@@ -950,19 +1116,17 @@ static int mchp_i2s_mcc_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int mchp_i2s_mcc_remove(struct platform_device *pdev)
+static void mchp_i2s_mcc_remove(struct platform_device *pdev)
 {
 	struct mchp_i2s_mcc_dev *dev = platform_get_drvdata(pdev);
 
 	clk_disable_unprepare(dev->pclk);
-
-	return 0;
 }
 
 static struct platform_driver mchp_i2s_mcc_driver = {
 	.driver		= {
 		.name	= "mchp_i2s_mcc",
-		.of_match_table	= of_match_ptr(mchp_i2s_mcc_dt_ids),
+		.of_match_table	= mchp_i2s_mcc_dt_ids,
 	},
 	.probe		= mchp_i2s_mcc_probe,
 	.remove		= mchp_i2s_mcc_remove,

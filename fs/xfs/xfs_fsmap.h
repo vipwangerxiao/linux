@@ -7,6 +7,7 @@
 #define __XFS_FSMAP_H__
 
 struct fsmap;
+struct fsmap_head;
 
 /* internal fsmap representation */
 struct xfs_fsmap {
@@ -27,13 +28,6 @@ struct xfs_fsmap_head {
 	struct xfs_fsmap fmh_keys[2];	/* low and high keys */
 };
 
-void xfs_fsmap_from_internal(struct fsmap *dest, struct xfs_fsmap *src);
-void xfs_fsmap_to_internal(struct xfs_fsmap *dest, struct fsmap *src);
-
-/* fsmap to userspace formatter - copy to user & advance pointer */
-typedef int (*xfs_fsmap_format_t)(struct xfs_fsmap *, void *);
-
-int xfs_getfsmap(struct xfs_mount *mp, struct xfs_fsmap_head *head,
-		xfs_fsmap_format_t formatter, void *arg);
+int xfs_ioc_getfsmap(struct xfs_inode *ip, struct fsmap_head __user *arg);
 
 #endif /* __XFS_FSMAP_H__ */

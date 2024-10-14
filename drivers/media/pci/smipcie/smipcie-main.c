@@ -1,17 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * SMI PCIe driver for DVBSky cards.
  *
  * Copyright (C) 2014 Max nibble <nibble.max@gmail.com>
- *
- *    This program is free software; you can redistribute it and/or modify
- *    it under the terms of the GNU General Public License as published by
- *    the Free Software Foundation; either version 2 of the License, or
- *    (at your option) any later version.
- *
- *    This program is distributed in the hope that it will be useful,
- *    but WITHOUT ANY WARRANTY; without even the implied warranty of
- *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *    GNU General Public License for more details.
  */
 
 #include "smipcie.h"
@@ -288,10 +279,10 @@ static void smi_port_clearInterrupt(struct smi_port *port)
 		(port->_dmaInterruptCH0 | port->_dmaInterruptCH1));
 }
 
-/* tasklet handler: DMA data to dmx.*/
-static void smi_dma_xfer(unsigned long data)
+/* BH work handler: DMA data to dmx.*/
+static void smi_dma_xfer(struct work_struct *t)
 {
-	struct smi_port *port = (struct smi_port *) data;
+	struct smi_port *port = from_work(port, t, bh_work);
 	struct smi_dev *dev = port->dev;
 	u32 intr_status, finishedData, dmaManagement;
 	u8 dmaChan0State, dmaChan1State;
@@ -360,13 +351,15 @@ static void smi_dma_xfer(unsigned long data)
 static void smi_port_dma_free(struct smi_port *port)
 {
 	if (port->cpu_addr[0]) {
-		pci_free_consistent(port->dev->pci_dev, SMI_TS_DMA_BUF_SIZE,
-				    port->cpu_addr[0], port->dma_addr[0]);
+		dma_free_coherent(&port->dev->pci_dev->dev,
+				  SMI_TS_DMA_BUF_SIZE, port->cpu_addr[0],
+				  port->dma_addr[0]);
 		port->cpu_addr[0] = NULL;
 	}
 	if (port->cpu_addr[1]) {
-		pci_free_consistent(port->dev->pci_dev, SMI_TS_DMA_BUF_SIZE,
-				    port->cpu_addr[1], port->dma_addr[1]);
+		dma_free_coherent(&port->dev->pci_dev->dev,
+				  SMI_TS_DMA_BUF_SIZE, port->cpu_addr[1],
+				  port->dma_addr[1]);
 		port->cpu_addr[1] = NULL;
 	}
 }
@@ -407,9 +400,10 @@ static int smi_port_init(struct smi_port *port, int dmaChanUsed)
 	}
 
 	if (port->_dmaInterruptCH0) {
-		port->cpu_addr[0] = pci_alloc_consistent(port->dev->pci_dev,
-					SMI_TS_DMA_BUF_SIZE,
-					&port->dma_addr[0]);
+		port->cpu_addr[0] = dma_alloc_coherent(&port->dev->pci_dev->dev,
+						       SMI_TS_DMA_BUF_SIZE,
+						       &port->dma_addr[0],
+						       GFP_KERNEL);
 		if (!port->cpu_addr[0]) {
 			dev_err(&port->dev->pci_dev->dev,
 				"Port[%d] DMA CH0 memory allocation failed!\n",
@@ -419,9 +413,10 @@ static int smi_port_init(struct smi_port *port, int dmaChanUsed)
 	}
 
 	if (port->_dmaInterruptCH1) {
-		port->cpu_addr[1] = pci_alloc_consistent(port->dev->pci_dev,
-					SMI_TS_DMA_BUF_SIZE,
-					&port->dma_addr[1]);
+		port->cpu_addr[1] = dma_alloc_coherent(&port->dev->pci_dev->dev,
+						       SMI_TS_DMA_BUF_SIZE,
+						       &port->dma_addr[1],
+						       GFP_KERNEL);
 		if (!port->cpu_addr[1]) {
 			dev_err(&port->dev->pci_dev->dev,
 				"Port[%d] DMA CH1 memory allocation failed!\n",
@@ -431,8 +426,8 @@ static int smi_port_init(struct smi_port *port, int dmaChanUsed)
 	}
 
 	smi_port_disableInterrupt(port);
-	tasklet_init(&port->tasklet, smi_dma_xfer, (unsigned long)port);
-	tasklet_disable(&port->tasklet);
+	INIT_WORK(&port->bh_work, smi_dma_xfer);
+	disable_work_sync(&port->bh_work);
 	port->enable = 1;
 	return 0;
 err:
@@ -443,7 +438,7 @@ err:
 static void smi_port_exit(struct smi_port *port)
 {
 	smi_port_disableInterrupt(port);
-	tasklet_kill(&port->tasklet);
+	cancel_work_sync(&port->bh_work);
 	smi_port_dma_free(port);
 	port->enable = 0;
 }
@@ -457,7 +452,7 @@ static int smi_port_irq(struct smi_port *port, u32 int_status)
 		smi_port_disableInterrupt(port);
 		port->_int_status = int_status;
 		smi_port_clearInterrupt(port);
-		tasklet_schedule(&port->tasklet);
+		queue_work(system_bh_wq, &port->bh_work);
 		handled = 1;
 	}
 	return handled;
@@ -493,8 +488,8 @@ static struct i2c_client *smi_add_i2c_client(struct i2c_adapter *adapter,
 	struct i2c_client *client;
 
 	request_module(info->type);
-	client = i2c_new_device(adapter, info);
-	if (client == NULL || client->dev.driver == NULL)
+	client = i2c_new_client_device(adapter, info);
+	if (!i2c_client_has_driver(client))
 		goto err_add_i2c_client;
 
 	if (!try_module_get(client->dev.driver->owner)) {
@@ -828,7 +823,7 @@ static int smi_start_feed(struct dvb_demux_feed *dvbdmxfeed)
 		smi_port_clearInterrupt(port);
 		smi_port_enableInterrupt(port);
 		smi_write(port->DMA_MANAGEMENT, dmaManagement);
-		tasklet_enable(&port->tasklet);
+		enable_and_queue_work(system_bh_wq, &port->bh_work);
 	}
 	return port->users;
 }
@@ -842,7 +837,7 @@ static int smi_stop_feed(struct dvb_demux_feed *dvbdmxfeed)
 	if (--port->users)
 		return port->users;
 
-	tasklet_disable(&port->tasklet);
+	disable_work_sync(&port->bh_work);
 	smi_port_disableInterrupt(port);
 	smi_clear(port->DMA_MANAGEMENT, 0x30003);
 	return 0;
@@ -972,7 +967,7 @@ static int smi_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 
 	/* should we set to 32bit DMA? */
-	ret = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+	ret = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
 	if (ret < 0)
 		goto err_pci_iounmap;
 

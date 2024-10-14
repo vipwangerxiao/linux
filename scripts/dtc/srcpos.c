@@ -1,23 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2007 Jon Loeliger, Freescale Semiconductor, Inc.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of the
- * License, or (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- *  General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307
- *                                                                   USA
  */
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 
 #include <stdio.h>
 
@@ -34,7 +22,7 @@ struct search_path {
 static struct search_path *search_path_head, **search_path_tail;
 
 /* Detect infinite include recursion. */
-#define MAX_SRCFILE_DEPTH     (100)
+#define MAX_SRCFILE_DEPTH     (200)
 static int srcfile_depth; /* = 0 */
 
 static char *get_dirname(const char *path)
@@ -325,8 +313,8 @@ srcpos_string(struct srcpos *pos)
 static char *
 srcpos_string_comment(struct srcpos *pos, bool first_line, int level)
 {
-	char *pos_str, *fname, *first, *rest;
-	bool fresh_fname = false;
+	char *pos_str, *fresh_fname = NULL, *first, *rest;
+	const char *fname;
 
 	if (!pos) {
 		if (level > 1) {
@@ -344,9 +332,9 @@ srcpos_string_comment(struct srcpos *pos, bool first_line, int level)
 	else if (level > 1)
 		fname = pos->file->name;
 	else {
-		fname = shorten_to_initial_path(pos->file->name);
-		if (fname)
-			fresh_fname = true;
+		fresh_fname = shorten_to_initial_path(pos->file->name);
+		if (fresh_fname)
+			fname = fresh_fname;
 		else
 			fname = pos->file->name;
 	}
@@ -360,7 +348,7 @@ srcpos_string_comment(struct srcpos *pos, bool first_line, int level)
 			  first_line ? pos->first_line : pos->last_line);
 
 	if (fresh_fname)
-		free(fname);
+		free(fresh_fname);
 
 	if (pos->next != NULL) {
 		rest = srcpos_string_comment(pos->next, first_line, level);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * DMA driver for STMicroelectronics STi FDMA controller
  *
@@ -5,20 +6,17 @@
  *
  * Author: Ludovic Barre <Ludovic.barre@st.com>
  *	   Peter Griffin <peter.griffin@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/init.h>
 #include <linux/module.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/of_dma.h>
 #include <linux/platform_device.h>
+#include <linux/property.h>
 #include <linux/interrupt.h>
 #include <linux/remoteproc.h>
+#include <linux/slab.h>
 
 #include "st_fdma.h"
 
@@ -742,18 +740,11 @@ static void st_fdma_free(struct st_fdma_dev *fdev)
 static int st_fdma_probe(struct platform_device *pdev)
 {
 	struct st_fdma_dev *fdev;
-	const struct of_device_id *match;
 	struct device_node *np = pdev->dev.of_node;
 	const struct st_fdma_driverdata *drvdata;
 	int ret, i;
 
-	match = of_match_device((st_fdma_match), &pdev->dev);
-	if (!match || !match->data) {
-		dev_err(&pdev->dev, "No device match found\n");
-		return -ENODEV;
-	}
-
-	drvdata = match->data;
+	drvdata = device_get_match_data(&pdev->dev);
 
 	fdev = devm_kzalloc(&pdev->dev, sizeof(*fdev), GFP_KERNEL);
 	if (!fdev)
@@ -775,10 +766,8 @@ static int st_fdma_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, fdev);
 
 	fdev->irq = platform_get_irq(pdev, 0);
-	if (fdev->irq < 0) {
-		dev_err(&pdev->dev, "Failed to get irq resource\n");
+	if (fdev->irq < 0)
 		return -EINVAL;
-	}
 
 	ret = devm_request_irq(&pdev->dev, fdev->irq, st_fdma_irq_handler, 0,
 			       dev_name(&pdev->dev), fdev);
@@ -854,15 +843,13 @@ err:
 	return ret;
 }
 
-static int st_fdma_remove(struct platform_device *pdev)
+static void st_fdma_remove(struct platform_device *pdev)
 {
 	struct st_fdma_dev *fdev = platform_get_drvdata(pdev);
 
 	devm_free_irq(&pdev->dev, fdev->irq, fdev);
 	st_slim_rproc_put(fdev->slim_rproc);
 	of_dma_controller_free(pdev->dev.of_node);
-
-	return 0;
 }
 
 static struct platform_driver st_fdma_platform_driver = {
@@ -871,7 +858,7 @@ static struct platform_driver st_fdma_platform_driver = {
 		.of_match_table = st_fdma_match,
 	},
 	.probe = st_fdma_probe,
-	.remove = st_fdma_remove,
+	.remove_new = st_fdma_remove,
 };
 module_platform_driver(st_fdma_platform_driver);
 
@@ -879,4 +866,4 @@ MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("STMicroelectronics FDMA engine driver");
 MODULE_AUTHOR("Ludovic.barre <Ludovic.barre@st.com>");
 MODULE_AUTHOR("Peter Griffin <peter.griffin@linaro.org>");
-MODULE_ALIAS("platform: " DRIVER_NAME);
+MODULE_ALIAS("platform:" DRIVER_NAME);

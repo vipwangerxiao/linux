@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Procedures for creating, accessing and interpreting the device tree.
  *
@@ -8,11 +9,6 @@
  *    {engebret|bergner}@us.ibm.com 
  *
  *  Adapted for sparc64 by David S. Miller davem@davemloft.net
- *
- *      This program is free software; you can redistribute it and/or
- *      modify it under the terms of the GNU General Public License
- *      as published by the Free Software Foundation; either version
- *      2 of the License, or (at your option) any later version.
  */
 
 #include <linux/memblock.h>
@@ -487,7 +483,9 @@ static void *record_one_cpu(struct device_node *dp, int cpuid, int arg)
 	ncpus_probed++;
 #ifdef CONFIG_SMP
 	set_cpu_present(cpuid, true);
-	set_cpu_possible(cpuid, true);
+
+	if (num_possible_cpus() < nr_cpu_ids)
+		set_cpu_possible(cpuid, true);
 #endif
 	return NULL;
 }
@@ -506,7 +504,7 @@ static void *fill_in_one_cpu(struct device_node *dp, int cpuid, int arg)
 	struct device_node *portid_parent = NULL;
 	int portid = -1;
 
-	if (of_find_property(dp, "cpuid", NULL)) {
+	if (of_property_present(dp, "cpuid")) {
 		int limit = 2;
 
 		portid_parent = dp;

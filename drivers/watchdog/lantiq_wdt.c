@@ -1,7 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- *  This program is free software; you can redistribute it and/or modify it
- *  under the terms of the GNU General Public License version 2 as published
- *  by the Free Software Foundation.
  *
  *  Copyright (C) 2010 John Crispin <john@phrozen.org>
  *  Copyright (C) 2017 Hauke Mehrtens <hauke@hauke-m.de>
@@ -11,7 +9,8 @@
 #include <linux/module.h>
 #include <linux/bitops.h>
 #include <linux/watchdog.h>
-#include <linux/of_platform.h>
+#include <linux/of.h>
+#include <linux/platform_device.h>
 #include <linux/uaccess.h>
 #include <linux/clk.h>
 #include <linux/io.h>

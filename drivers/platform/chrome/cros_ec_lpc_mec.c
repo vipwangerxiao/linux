@@ -10,19 +10,69 @@
 
 #include "cros_ec_lpc_mec.h"
 
+#define ACPI_LOCK_DELAY_MS 500
+
 /*
  * This mutex must be held while accessing the EMI unit. We can't rely on the
  * EC mutex because memmap data may be accessed without it being held.
  */
-static struct mutex io_mutex;
+static DEFINE_MUTEX(io_mutex);
+/*
+ * An alternative mutex to be used when the ACPI AML code may also
+ * access memmap data.  When set, this mutex is used in preference to
+ * io_mutex.
+ */
+static acpi_handle aml_mutex;
+
 static u16 mec_emi_base, mec_emi_end;
 
-/*
- * cros_ec_lpc_mec_emi_write_address
+/**
+ * cros_ec_lpc_mec_lock() - Acquire mutex for EMI
  *
- * Initialize EMI read / write at a given address.
+ * @return: Negative error code, or zero for success
+ */
+static int cros_ec_lpc_mec_lock(void)
+{
+	bool success;
+
+	if (!aml_mutex) {
+		mutex_lock(&io_mutex);
+		return 0;
+	}
+
+	success = ACPI_SUCCESS(acpi_acquire_mutex(aml_mutex,
+						  NULL, ACPI_LOCK_DELAY_MS));
+	if (!success)
+		return -EBUSY;
+
+	return 0;
+}
+
+/**
+ * cros_ec_lpc_mec_unlock() - Release mutex for EMI
  *
- * @addr:        Starting read / write address
+ * @return: Negative error code, or zero for success
+ */
+static int cros_ec_lpc_mec_unlock(void)
+{
+	bool success;
+
+	if (!aml_mutex) {
+		mutex_unlock(&io_mutex);
+		return 0;
+	}
+
+	success = ACPI_SUCCESS(acpi_release_mutex(aml_mutex, NULL));
+	if (!success)
+		return -EBUSY;
+
+	return 0;
+}
+
+/**
+ * cros_ec_lpc_mec_emi_write_address() - Initialize EMI at a given address.
+ *
+ * @addr: Starting read / write address
  * @access_type: Type of access, typically 32-bit auto-increment
  */
 static void cros_ec_lpc_mec_emi_write_address(u16 addr,
@@ -43,9 +93,6 @@ static void cros_ec_lpc_mec_emi_write_address(u16 addr,
  */
 int cros_ec_lpc_mec_in_range(unsigned int offset, unsigned int length)
 {
-	if (length == 0)
-		return -EINVAL;
-
 	if (WARN_ON(mec_emi_base == 0 || mec_emi_end == 0))
 		return -EINVAL;
 
@@ -61,24 +108,29 @@ int cros_ec_lpc_mec_in_range(unsigned int offset, unsigned int length)
 	return 0;
 }
 
-/*
- * cros_ec_lpc_io_bytes_mec - Read / write bytes to MEC EMI port
+/**
+ * cros_ec_lpc_io_bytes_mec() - Read / write bytes to MEC EMI port.
  *
  * @io_type: MEC_IO_READ or MEC_IO_WRITE, depending on request
  * @offset:  Base read / write address
  * @length:  Number of bytes to read / write
  * @buf:     Destination / source buffer
  *
- * @return 8-bit checksum of all bytes read / written
+ * @return:  A negative error code on error, or 8-bit checksum of all
+ *           bytes read / written
  */
-u8 cros_ec_lpc_io_bytes_mec(enum cros_ec_lpc_mec_io_type io_type,
-			    unsigned int offset, unsigned int length,
-			    u8 *buf)
+int cros_ec_lpc_io_bytes_mec(enum cros_ec_lpc_mec_io_type io_type,
+			     unsigned int offset, unsigned int length,
+			     u8 *buf)
 {
 	int i = 0;
 	int io_addr;
 	u8 sum = 0;
 	enum cros_ec_lpc_mec_emi_access_mode access, new_access;
+	int ret;
+
+	if (length == 0)
+		return 0;
 
 	/* Return checksum of 0 if window is not initialized */
 	WARN_ON(mec_emi_base == 0 || mec_emi_end == 0);
@@ -94,7 +146,9 @@ u8 cros_ec_lpc_io_bytes_mec(enum cros_ec_lpc_mec_io_type io_type,
 	else
 		access = ACCESS_TYPE_LONG_AUTO_INCREMENT;
 
-	mutex_lock(&io_mutex);
+	ret = cros_ec_lpc_mec_lock();
+	if (ret)
+		return ret;
 
 	/* Initialize I/O at desired address */
 	cros_ec_lpc_mec_emi_write_address(offset, access);
@@ -136,7 +190,9 @@ u8 cros_ec_lpc_io_bytes_mec(enum cros_ec_lpc_mec_io_type io_type,
 	}
 
 done:
-	mutex_unlock(&io_mutex);
+	ret = cros_ec_lpc_mec_unlock();
+	if (ret)
+		return ret;
 
 	return sum;
 }
@@ -144,14 +200,22 @@ EXPORT_SYMBOL(cros_ec_lpc_io_bytes_mec);
 
 void cros_ec_lpc_mec_init(unsigned int base, unsigned int end)
 {
-	mutex_init(&io_mutex);
 	mec_emi_base = base;
 	mec_emi_end = end;
 }
 EXPORT_SYMBOL(cros_ec_lpc_mec_init);
 
-void cros_ec_lpc_mec_destroy(void)
+int cros_ec_lpc_mec_acpi_mutex(struct acpi_device *adev, const char *pathname)
 {
-	mutex_destroy(&io_mutex);
+	int status;
+
+	if (!adev)
+		return -ENOENT;
+
+	status = acpi_get_handle(adev->handle, pathname, &aml_mutex);
+	if (ACPI_FAILURE(status))
+		return -ENOENT;
+
+	return 0;
 }
-EXPORT_SYMBOL(cros_ec_lpc_mec_destroy);
+EXPORT_SYMBOL(cros_ec_lpc_mec_acpi_mutex);

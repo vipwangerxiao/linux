@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Yama Linux Security Module
  *
@@ -5,11 +6,6 @@
  *
  * Copyright (C) 2010 Canonical, Ltd.
  * Copyright (C) 2011 The Chromium OS Authors.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2, as
- * published by the Free Software Foundation.
- *
  */
 
 #include <linux/lsm_hooks.h>
@@ -22,6 +18,7 @@
 #include <linux/task_work.h>
 #include <linux/sched.h>
 #include <linux/spinlock.h>
+#include <uapi/linux/lsm.h>
 
 #define YAMA_SCOPE_DISABLED	0
 #define YAMA_SCOPE_RELATIONAL	1
@@ -103,7 +100,7 @@ static void report_access(const char *access, struct task_struct *target,
 	info->access = access;
 	info->target = target;
 	info->agent = agent;
-	if (task_work_add(current, &info->work, true) == 0)
+	if (task_work_add(current, &info->work, TWA_RESUME) == 0)
 		return; /* success */
 
 	WARN(1, "report_access called from exiting task");
@@ -114,6 +111,7 @@ static void report_access(const char *access, struct task_struct *target,
 
 /**
  * yama_relation_cleanup - remove invalid entries from the relation list
+ * @work: unused
  *
  */
 static void yama_relation_cleanup(struct work_struct *work)
@@ -425,7 +423,12 @@ static int yama_ptrace_traceme(struct task_struct *parent)
 	return rc;
 }
 
-static struct security_hook_list yama_hooks[] __lsm_ro_after_init = {
+static const struct lsm_id yama_lsmid = {
+	.name = "yama",
+	.id = LSM_ID_YAMA,
+};
+
+static struct security_hook_list yama_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(ptrace_access_check, yama_ptrace_access_check),
 	LSM_HOOK_INIT(ptrace_traceme, yama_ptrace_traceme),
 	LSM_HOOK_INIT(task_prctl, yama_task_prctl),
@@ -433,8 +436,8 @@ static struct security_hook_list yama_hooks[] __lsm_ro_after_init = {
 };
 
 #ifdef CONFIG_SYSCTL
-static int yama_dointvec_minmax(struct ctl_table *table, int write,
-				void __user *buffer, size_t *lenp, loff_t *ppos)
+static int yama_dointvec_minmax(const struct ctl_table *table, int write,
+				void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct ctl_table table_copy;
 
@@ -449,14 +452,7 @@ static int yama_dointvec_minmax(struct ctl_table *table, int write,
 	return proc_dointvec_minmax(&table_copy, write, buffer, lenp, ppos);
 }
 
-static int zero;
 static int max_scope = YAMA_SCOPE_NO_ATTACH;
-
-static struct ctl_path yama_sysctl_path[] = {
-	{ .procname = "kernel", },
-	{ .procname = "yama", },
-	{ }
-};
 
 static struct ctl_table yama_sysctl_table[] = {
 	{
@@ -465,14 +461,13 @@ static struct ctl_table yama_sysctl_table[] = {
 		.maxlen         = sizeof(int),
 		.mode           = 0644,
 		.proc_handler   = yama_dointvec_minmax,
-		.extra1         = &zero,
+		.extra1         = SYSCTL_ZERO,
 		.extra2         = &max_scope,
 	},
-	{ }
 };
 static void __init yama_init_sysctl(void)
 {
-	if (!register_sysctl_paths(yama_sysctl_path, yama_sysctl_table))
+	if (!register_sysctl("kernel/yama", yama_sysctl_table))
 		panic("Yama: sysctl registration failed.\n");
 }
 #else
@@ -482,7 +477,7 @@ static inline void yama_init_sysctl(void) { }
 static int __init yama_init(void)
 {
 	pr_info("Yama: becoming mindful.\n");
-	security_add_hooks(yama_hooks, ARRAY_SIZE(yama_hooks), "yama");
+	security_add_hooks(yama_hooks, ARRAY_SIZE(yama_hooks), &yama_lsmid);
 	yama_init_sysctl();
 	return 0;
 }

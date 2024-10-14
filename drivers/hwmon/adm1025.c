@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * adm1025.c
  *
@@ -12,7 +13,7 @@
  * resolution of about 0.5% of the nominal value). Temperature values are
  * reported with a 1 deg resolution and a 3 deg accuracy. Complete
  * datasheet can be obtained from Analog's website at:
- *   http://www.onsemi.com/PowerSolutions/product.do?id=ADM1025
+ *   https://www.onsemi.com/PowerSolutions/product.do?id=ADM1025
  *
  * This driver also supports the ADM1025A, which differs from the ADM1025
  * only in that it has "open-drain VID inputs while the ADM1025 has
@@ -29,20 +30,6 @@
  * Since the ADM1025 was the first chipset supported by this driver, most
  * comments will refer to this chipset, but are actually general and
  * concern all supported chipsets, unless mentioned otherwise.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/module.h>
@@ -110,7 +97,7 @@ struct adm1025_data {
 	struct i2c_client *client;
 	const struct attribute_group *groups[3];
 	struct mutex update_lock;
-	char valid; /* zero until following fields are valid */
+	bool valid; /* false until following fields are valid */
 	unsigned long last_updated; /* in jiffies */
 
 	u8 in[6];		/* register value */
@@ -161,7 +148,7 @@ static struct adm1025_data *adm1025_update_device(struct device *dev)
 			      ADM1025_REG_VID4) & 0x01) << 4);
 
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 	}
 
 	mutex_unlock(&data->update_lock);
@@ -483,7 +470,7 @@ static int adm1025_detect(struct i2c_client *client,
 	else
 		return -ENODEV;
 
-	strlcpy(info->type, name, I2C_NAME_SIZE);
+	strscpy(info->type, name, I2C_NAME_SIZE);
 
 	return 0;
 }
@@ -530,8 +517,7 @@ static void adm1025_init_client(struct i2c_client *client)
 					  (reg&0x7E)|0x01);
 }
 
-static int adm1025_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int adm1025_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;

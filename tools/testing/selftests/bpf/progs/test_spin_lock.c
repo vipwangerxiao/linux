@@ -2,7 +2,8 @@
 // Copyright (c) 2019 Facebook
 #include <linux/bpf.h>
 #include <linux/version.h>
-#include "bpf_helpers.h"
+#include <bpf/bpf_helpers.h>
+#include "bpf_misc.h"
 
 struct hmap_elem {
 	volatile int cnt;
@@ -10,29 +11,23 @@ struct hmap_elem {
 	int test_padding;
 };
 
-struct bpf_map_def SEC("maps") hmap = {
-	.type = BPF_MAP_TYPE_HASH,
-	.key_size = sizeof(int),
-	.value_size = sizeof(struct hmap_elem),
-	.max_entries = 1,
-};
-
-BPF_ANNOTATE_KV_PAIR(hmap, int, struct hmap_elem);
-
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1);
+	__type(key, int);
+	__type(value, struct hmap_elem);
+} hmap SEC(".maps");
 
 struct cls_elem {
 	struct bpf_spin_lock lock;
 	volatile int cnt;
 };
 
-struct bpf_map_def SEC("maps") cls_map = {
-	.type = BPF_MAP_TYPE_CGROUP_STORAGE,
-	.key_size = sizeof(struct bpf_cgroup_storage_key),
-	.value_size = sizeof(struct cls_elem),
-};
-
-BPF_ANNOTATE_KV_PAIR(cls_map, struct bpf_cgroup_storage_key,
-		     struct cls_elem);
+struct {
+	__uint(type, BPF_MAP_TYPE_CGROUP_STORAGE);
+	__type(key, struct bpf_cgroup_storage_key);
+	__type(value, struct cls_elem);
+} cls_map SEC(".maps");
 
 struct bpf_vqueue {
 	struct bpf_spin_lock lock;
@@ -42,18 +37,17 @@ struct bpf_vqueue {
 	unsigned int rate;
 };
 
-struct bpf_map_def SEC("maps") vqueue = {
-	.type = BPF_MAP_TYPE_ARRAY,
-	.key_size = sizeof(int),
-	.value_size = sizeof(struct bpf_vqueue),
-	.max_entries = 1,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, int);
+	__type(value, struct bpf_vqueue);
+} vqueue SEC(".maps");
 
-BPF_ANNOTATE_KV_PAIR(vqueue, int, struct bpf_vqueue);
 #define CREDIT_PER_NS(delta, rate) (((delta) * rate) >> 20)
 
-SEC("spin_lock_demo")
-int bpf_sping_lock_test(struct __sk_buff *skb)
+SEC("cgroup_skb/ingress")
+int bpf_spin_lock_test(struct __sk_buff *skb)
 {
 	volatile int credit = 0, max_credit = 100, pkt_len = 64;
 	struct hmap_elem zero = {}, *val;
@@ -96,6 +90,8 @@ int bpf_sping_lock_test(struct __sk_buff *skb)
 	credit = q->credit;
 	bpf_spin_unlock(&q->lock);
 
+	__sink(credit);
+
 	/* spin_lock in cgroup local storage */
 	cls = bpf_get_local_storage(&cls_map, 0);
 	bpf_spin_lock(&cls->lock);
@@ -105,4 +101,69 @@ int bpf_sping_lock_test(struct __sk_buff *skb)
 err:
 	return err;
 }
+
+struct bpf_spin_lock lockA __hidden SEC(".data.A");
+
+__noinline
+static int static_subprog(struct __sk_buff *ctx)
+{
+	volatile int ret = 0;
+
+	if (ctx->protocol)
+		return ret;
+	return ret + ctx->len;
+}
+
+__noinline
+static int static_subprog_lock(struct __sk_buff *ctx)
+{
+	volatile int ret = 0;
+
+	ret = static_subprog(ctx);
+	bpf_spin_lock(&lockA);
+	return ret + ctx->len;
+}
+
+__noinline
+static int static_subprog_unlock(struct __sk_buff *ctx)
+{
+	volatile int ret = 0;
+
+	ret = static_subprog(ctx);
+	bpf_spin_unlock(&lockA);
+	return ret + ctx->len;
+}
+
+SEC("tc")
+int lock_static_subprog_call(struct __sk_buff *ctx)
+{
+	int ret = 0;
+
+	bpf_spin_lock(&lockA);
+	if (ctx->mark == 42)
+		ret = static_subprog(ctx);
+	bpf_spin_unlock(&lockA);
+	return ret;
+}
+
+SEC("tc")
+int lock_static_subprog_lock(struct __sk_buff *ctx)
+{
+	int ret = 0;
+
+	ret = static_subprog_lock(ctx);
+	bpf_spin_unlock(&lockA);
+	return ret;
+}
+
+SEC("tc")
+int lock_static_subprog_unlock(struct __sk_buff *ctx)
+{
+	int ret = 0;
+
+	bpf_spin_lock(&lockA);
+	ret = static_subprog_unlock(ctx);
+	return ret;
+}
+
 char _license[] SEC("license") = "GPL";

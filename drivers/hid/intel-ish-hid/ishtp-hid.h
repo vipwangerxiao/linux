@@ -1,16 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * ISHTP-HID glue driver's definitions.
  *
  * Copyright (c) 2014-2016, Intel Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
- * more details.
  */
 #ifndef ISHTP_HID__H
 #define	ISHTP_HID__H
@@ -24,14 +16,9 @@
 #define	IS_RESPONSE	0x80
 
 /* Used to dump to Linux trace buffer, if enabled */
-extern void (*hid_print_trace)(void *unused, const char *format, ...);
+extern ishtp_print_log ishtp_hid_print_trace;
 #define hid_ishtp_trace(client, ...) \
-		(hid_print_trace)(NULL, __VA_ARGS__)
-
-/* ISH Transport protocol (ISHTP in short) GUID */
-static const guid_t hid_ishtp_guid =
-	GUID_INIT(0x33AECD58, 0xB679, 0x4E54,
-		  0x9B, 0xD9, 0xA0, 0x4D, 0x34, 0xF0, 0xC2, 0x26);
+	(ishtp_hid_print_trace)(NULL, __VA_ARGS__)
 
 /* ISH HID message structure */
 struct hostif_msg_hdr {
@@ -118,7 +105,7 @@ struct report_list {
  * @multi_packet_cnt:	Count of fragmented packet count
  *
  * This structure is used to store completion flags and per client data like
- * like report description, number of HID devices etc.
+ * report description, number of HID devices etc.
  */
 struct ishtp_cl_data {
 	/* completion flags */
@@ -148,6 +135,7 @@ struct ishtp_cl_data {
 	int multi_packet_cnt;
 
 	struct work_struct work;
+	struct work_struct resume_work;
 	struct ishtp_cl_device *cl_device;
 };
 

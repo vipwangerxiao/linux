@@ -5,8 +5,9 @@
  * Copyright (C) 2008 Magnus Damm
  */
 #include <linux/clkdev.h>
-#include <linux/dma-mapping.h>
+#include <linux/dma-map-ops.h>
 #include <linux/init.h>
+#include <linux/platform_data/tmio.h>
 #include <linux/platform_device.h>
 #include <linux/interrupt.h>
 #include <linux/input.h>
@@ -14,7 +15,6 @@
 #include <linux/memblock.h>
 #include <linux/mmc/host.h>
 #include <linux/mtd/physmap.h>
-#include <linux/mfd/tmio.h>
 #include <linux/mtd/platnand.h>
 #include <linux/i2c.h>
 #include <linux/regulator/fixed.h>
@@ -602,10 +602,9 @@ static int __init migor_devices_setup(void)
 
 	/* Initialize CEU platform device separately to map memory first */
 	device_initialize(&migor_ceu_device.dev);
-	arch_setup_pdev_archdata(&migor_ceu_device);
 	dma_declare_coherent_memory(&migor_ceu_device.dev,
 			ceu_dma_membase, ceu_dma_membase,
-			ceu_dma_membase + CEU_BUFFER_MEMORY_SIZE - 1);
+			CEU_BUFFER_MEMORY_SIZE);
 
 	platform_device_add(&migor_ceu_device);
 
@@ -634,7 +633,7 @@ static void __init migor_mv_mem_reserve(void)
 	if (!phys)
 		panic("Failed to allocate CEU memory\n");
 
-	memblock_free(phys, size);
+	memblock_phys_free(phys, size);
 	memblock_remove(phys, size);
 
 	ceu_dma_membase = phys;

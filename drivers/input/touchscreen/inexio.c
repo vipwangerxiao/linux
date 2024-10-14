@@ -1,16 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * iNexio serial touchscreen driver
  *
  * Copyright (c) 2008 Richard Lemon
  * Based on the mtouch driver (c) Vojtech Pavlik and Dan Streetman
- *
  */
 
-/*
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- */
 
 /*
  * 2008/06/19 Richard Lemon <richard@codelemon.com>
@@ -119,7 +114,7 @@ static int inexio_connect(struct serio *serio, struct serio_driver *drv)
 	struct input_dev *input_dev;
 	int err;
 
-	pinexio = kzalloc(sizeof(struct inexio), GFP_KERNEL);
+	pinexio = kzalloc(sizeof(*pinexio), GFP_KERNEL);
 	input_dev = input_allocate_device();
 	if (!pinexio || !input_dev) {
 		err = -ENOMEM;

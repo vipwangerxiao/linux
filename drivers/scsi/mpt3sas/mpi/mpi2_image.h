@@ -5,7 +5,7 @@
  *          Name: mpi2_image.h
  * Description: Contains definitions for firmware and other component images
  * Creation Date: 04/02/2018
- *       Version: 02.06.03
+ *       Version: 02.06.04
  *
  *
  * Version History
@@ -17,6 +17,12 @@
  * 08-14-18  02.06.01  Corrected define for MPI26_IMAGE_HEADER_SIGNATURE0_MPI26
  * 08-28-18  02.06.02  Added MPI2_EXT_IMAGE_TYPE_RDE
  * 09-07-18  02.06.03  Added MPI26_EVENT_PCIE_TOPO_PI_16_LANES
+ * 12-17-18  02.06.04  Addd MPI2_EXT_IMAGE_TYPE_PBLP
+ *			Shorten some defines to be compatible with DOS
+ * 06-24-19  02.06.05  Whitespace adjustments to help with identifier
+ *			checking tool.
+ * 10-02-19  02.06.06  Added MPI26_IMAGE_HEADER_SIG1_COREDUMP
+ *                     Added MPI2_FLASH_REGION_COREDUMP
  */
 #ifndef MPI2_IMAGE_H
 #define MPI2_IMAGE_H
@@ -200,17 +206,19 @@ typedef struct _MPI26_COMPONENT_IMAGE_HEADER {
 #define MPI26_IMAGE_HEADER_SIGNATURE0_MPI26                     (0xEB000042)
 
 /**** Definitions for Signature1 field ****/
-#define MPI26_IMAGE_HEADER_SIGNATURE1_APPLICATION              (0x20505041)
-#define MPI26_IMAGE_HEADER_SIGNATURE1_CBB                      (0x20424243)
-#define MPI26_IMAGE_HEADER_SIGNATURE1_MFG                      (0x2047464D)
-#define MPI26_IMAGE_HEADER_SIGNATURE1_BIOS                     (0x534F4942)
-#define MPI26_IMAGE_HEADER_SIGNATURE1_HIIM                     (0x4D494948)
-#define MPI26_IMAGE_HEADER_SIGNATURE1_HIIA                     (0x41494948)
-#define MPI26_IMAGE_HEADER_SIGNATURE1_CPLD                     (0x444C5043)
-#define MPI26_IMAGE_HEADER_SIGNATURE1_SPD                      (0x20445053)
-#define MPI26_IMAGE_HEADER_SIGNATURE1_NVDATA                   (0x5444564E)
-#define MPI26_IMAGE_HEADER_SIGNATURE1_GAS_GAUGE                (0x20534147)
-#define MPI26_IMAGE_HEADER_SIGNATURE1_PBLP                     (0x50424C50)
+#define MPI26_IMAGE_HEADER_SIG1_APPLICATION              (0x20505041)
+#define MPI26_IMAGE_HEADER_SIG1_CBB                      (0x20424243)
+#define MPI26_IMAGE_HEADER_SIG1_MFG                      (0x2047464D)
+#define MPI26_IMAGE_HEADER_SIG1_BIOS                     (0x534F4942)
+#define MPI26_IMAGE_HEADER_SIG1_HIIM                     (0x4D494948)
+#define MPI26_IMAGE_HEADER_SIG1_HIIA                     (0x41494948)
+#define MPI26_IMAGE_HEADER_SIG1_CPLD                     (0x444C5043)
+#define MPI26_IMAGE_HEADER_SIG1_SPD                      (0x20445053)
+#define MPI26_IMAGE_HEADER_SIG1_NVDATA                   (0x5444564E)
+#define MPI26_IMAGE_HEADER_SIG1_GAS_GAUGE                (0x20534147)
+#define MPI26_IMAGE_HEADER_SIG1_PBLP                     (0x504C4250)
+/* little-endian "DUMP" */
+#define MPI26_IMAGE_HEADER_SIG1_COREDUMP                 (0x504D5544)
 
 /**** Definitions for Signature2 field ****/
 #define MPI26_IMAGE_HEADER_SIGNATURE2_VALUE                    (0x50584546)
@@ -278,6 +286,7 @@ typedef struct _MPI2_EXT_IMAGE_HEADER {
 #define MPI2_EXT_IMAGE_TYPE_MEGARAID                (0x08)
 #define MPI2_EXT_IMAGE_TYPE_ENCRYPTED_HASH          (0x09)
 #define MPI2_EXT_IMAGE_TYPE_RDE                     (0x0A)
+#define MPI2_EXT_IMAGE_TYPE_PBLP                    (0x0B)
 #define MPI2_EXT_IMAGE_TYPE_MIN_PRODUCT_SPECIFIC    (0x80)
 #define MPI2_EXT_IMAGE_TYPE_MAX_PRODUCT_SPECIFIC    (0xFF)
 
@@ -286,20 +295,9 @@ typedef struct _MPI2_EXT_IMAGE_HEADER {
 /*FLASH Layout Extended Image Data */
 
 /*
- *Host code (drivers, BIOS, utilities, etc.) should leave this define set to
- *one and check RegionsPerLayout at runtime.
+ *Host code (drivers, BIOS, utilities, etc.) should check NumberOfLayouts and
+ *RegionsPerLayout at runtime before using Layout[] and Region[].
  */
-#ifndef MPI2_FLASH_NUMBER_OF_REGIONS
-#define MPI2_FLASH_NUMBER_OF_REGIONS        (1)
-#endif
-
-/*
- *Host code (drivers, BIOS, utilities, etc.) should leave this define set to
- *one and check NumberOfLayouts at runtime.
- */
-#ifndef MPI2_FLASH_NUMBER_OF_LAYOUTS
-#define MPI2_FLASH_NUMBER_OF_LAYOUTS        (1)
-#endif
 
 typedef struct _MPI2_FLASH_REGION {
 	U8 RegionType;		/*0x00 */
@@ -316,7 +314,7 @@ typedef struct _MPI2_FLASH_LAYOUT {
 	U32 Reserved1;		/*0x04 */
 	U32 Reserved2;		/*0x08 */
 	U32 Reserved3;		/*0x0C */
-	MPI2_FLASH_REGION Region[MPI2_FLASH_NUMBER_OF_REGIONS];	/*0x10 */
+	MPI2_FLASH_REGION Region[];	/*0x10 */
 } MPI2_FLASH_LAYOUT, *PTR_MPI2_FLASH_LAYOUT,
 	Mpi2FlashLayout_t, *pMpi2FlashLayout_t;
 
@@ -330,7 +328,7 @@ typedef struct _MPI2_FLASH_LAYOUT_DATA {
 	U16 MinimumSectorAlignment;	/*0x08 */
 	U16 Reserved3;		/*0x0A */
 	U32 Reserved4;		/*0x0C */
-	MPI2_FLASH_LAYOUT Layout[MPI2_FLASH_NUMBER_OF_LAYOUTS];	/*0x10 */
+	MPI2_FLASH_LAYOUT Layout[];	/*0x10 */
 } MPI2_FLASH_LAYOUT_DATA, *PTR_MPI2_FLASH_LAYOUT_DATA,
 	Mpi2FlashLayoutData_t, *pMpi2FlashLayoutData_t;
 
@@ -356,6 +354,7 @@ typedef struct _MPI2_FLASH_LAYOUT_DATA {
 #define MPI2_FLASH_REGION_MR_NVDATA             (0x14)
 #define MPI2_FLASH_REGION_CPLD                  (0x15)
 #define MPI2_FLASH_REGION_PSOC                  (0x16)
+#define MPI2_FLASH_REGION_COREDUMP              (0x17)
 
 /*ImageRevision */
 #define MPI2_FLASH_LAYOUT_IMAGE_REVISION        (0x00)
@@ -363,12 +362,9 @@ typedef struct _MPI2_FLASH_LAYOUT_DATA {
 /*Supported Devices Extended Image Data */
 
 /*
- *Host code (drivers, BIOS, utilities, etc.) should leave this define set to
- *one and check NumberOfDevices at runtime.
+ *Host code (drivers, BIOS, utilities, etc.) should check NumberOfDevices at
+ *runtime before using SupportedDevice[].
  */
-#ifndef MPI2_SUPPORTED_DEVICES_IMAGE_NUM_DEVICES
-#define MPI2_SUPPORTED_DEVICES_IMAGE_NUM_DEVICES    (1)
-#endif
 
 typedef struct _MPI2_SUPPORTED_DEVICE {
 	U16 DeviceID;		/*0x00 */
@@ -389,7 +385,7 @@ typedef struct _MPI2_SUPPORTED_DEVICES_DATA {
 	U8 Reserved2;		/*0x03 */
 	U32 Reserved3;		/*0x04 */
 	MPI2_SUPPORTED_DEVICE
-	SupportedDevice[MPI2_SUPPORTED_DEVICES_IMAGE_NUM_DEVICES];/*0x08 */
+	SupportedDevice[];	/*0x08 */
 } MPI2_SUPPORTED_DEVICES_DATA, *PTR_MPI2_SUPPORTED_DEVICES_DATA,
 	Mpi2SupportedDevicesData_t, *pMpi2SupportedDevicesData_t;
 
@@ -454,7 +450,7 @@ typedef struct _MPI25_ENCRYPTED_HASH_ENTRY {
 	U8		EncryptionAlgorithm;	/*0x02 */
 	U8		Reserved1;		/*0x03 */
 	U32		Reserved2;		/*0x04 */
-	U32		EncryptedHash[1];	/*0x08 */ /* variable length */
+	U32		EncryptedHash[];	/*0x08 */
 } MPI25_ENCRYPTED_HASH_ENTRY, *PTR_MPI25_ENCRYPTED_HASH_ENTRY,
 Mpi25EncryptedHashEntry_t, *pMpi25EncryptedHashEntry_t;
 
@@ -472,12 +468,12 @@ Mpi25EncryptedHashEntry_t, *pMpi25EncryptedHashEntry_t;
 #define MPI25_HASH_ALGORITHM_UNUSED             (0x00)
 #define MPI25_HASH_ALGORITHM_SHA256             (0x01)
 
-#define MPI26_HASH_ALGORITHM_VERSION_MASK       (0xE0)
-#define MPI26_HASH_ALGORITHM_VERSION_NONE       (0x00)
-#define MPI26_HASH_ALGORITHM_VERSION_SHA1       (0x20)
-#define MPI26_HASH_ALGORITHM_VERSION_SHA2       (0x40)
-#define MPI26_HASH_ALGORITHM_VERSION_SHA3       (0x60)
-#define MPI26_HASH_ALGORITHM_SIZE_MASK          (0x1F)
+#define MPI26_HASH_ALGORITHM_VER_MASK		(0xE0)
+#define MPI26_HASH_ALGORITHM_VER_NONE		(0x00)
+#define MPI26_HASH_ALGORITHM_VER_SHA1		(0x20)
+#define MPI26_HASH_ALGORITHM_VER_SHA2		(0x40)
+#define MPI26_HASH_ALGORITHM_VER_SHA3		(0x60)
+#define MPI26_HASH_ALGORITHM_SIZE_MASK		(0x1F)
 #define MPI26_HASH_ALGORITHM_SIZE_256           (0x01)
 #define MPI26_HASH_ALGORITHM_SIZE_512           (0x02)
 
@@ -498,7 +494,7 @@ typedef struct _MPI25_ENCRYPTED_HASH_DATA {
 	U8				NumHash;		/*0x01 */
 	U16				Reserved1;		/*0x02 */
 	U32				Reserved2;		/*0x04 */
-	MPI25_ENCRYPTED_HASH_ENTRY	EncryptedHashEntry[1];  /*0x08 */
+	MPI25_ENCRYPTED_HASH_ENTRY	EncryptedHashEntry[];	/*0x08 */
 } MPI25_ENCRYPTED_HASH_DATA, *PTR_MPI25_ENCRYPTED_HASH_DATA,
 Mpi25EncryptedHashData_t, *pMpi25EncryptedHashData_t;
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * An i2c driver for the Xicor/Intersil X1205 RTC
  * Copyright 2004 Karen Spearel
@@ -11,10 +12,6 @@
  *
  * Information and datasheet:
  * http://www.intersil.com/cda/deviceinfo/0,1477,X1205,00.html
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/i2c.h>
@@ -617,8 +614,7 @@ static void x1205_sysfs_unregister(struct device *dev)
 }
 
 
-static int x1205_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int x1205_probe(struct i2c_client *client)
 {
 	int err = 0;
 	unsigned char sr;
@@ -661,14 +657,13 @@ static int x1205_probe(struct i2c_client *client,
 	return 0;
 }
 
-static int x1205_remove(struct i2c_client *client)
+static void x1205_remove(struct i2c_client *client)
 {
 	x1205_sysfs_unregister(&client->dev);
-	return 0;
 }
 
 static const struct i2c_device_id x1205_id[] = {
-	{ "x1205", 0 },
+	{ "x1205" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, x1205_id);

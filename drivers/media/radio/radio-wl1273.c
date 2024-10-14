@@ -1,17 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for the Texas Instruments WL1273 FM radio.
  *
  * Copyright (C) 2011 Nokia Corporation
  * Author: Matti J. Aaltonen <matti.j.aaltonen@nokia.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	See the
- * GNU General Public License for more details.
  */
 
 #include <linux/delay.h>
@@ -1028,7 +1020,7 @@ static int wl1273_fm_set_rds(struct wl1273_device *radio, unsigned int new_mode)
 	}
 
 	if (!r)
-		radio->rds_on = (new_mode == WL1273_RDS_ON) ? true : false;
+		radio->rds_on = new_mode == WL1273_RDS_ON;
 
 	return r;
 }
@@ -1156,8 +1148,7 @@ static int wl1273_fm_fops_release(struct file *file)
 	if (radio->rds_users > 0) {
 		radio->rds_users--;
 		if (radio->rds_users == 0) {
-			if (mutex_lock_interruptible(&core->lock))
-				return -EINTR;
+			mutex_lock(&core->lock);
 
 			radio->irq_flags &= ~WL1273_RDS_EVENT;
 
@@ -1288,18 +1279,10 @@ static int wl1273_fm_vidioc_querycap(struct file *file, void *priv,
 
 	strscpy(capability->driver, WL1273_FM_DRIVER_NAME,
 		sizeof(capability->driver));
-	strscpy(capability->card, "Texas Instruments Wl1273 FM Radio",
+	strscpy(capability->card, "TI Wl1273 FM Radio",
 		sizeof(capability->card));
 	strscpy(capability->bus_info, radio->bus_type,
 		sizeof(capability->bus_info));
-
-	capability->device_caps = V4L2_CAP_HW_FREQ_SEEK |
-		V4L2_CAP_TUNER | V4L2_CAP_RADIO | V4L2_CAP_AUDIO |
-		V4L2_CAP_RDS_CAPTURE | V4L2_CAP_MODULATOR |
-		V4L2_CAP_RDS_OUTPUT;
-	capability->capabilities = capability->device_caps |
-		V4L2_CAP_DEVICE_CAPS;
-
 	return 0;
 }
 
@@ -1988,9 +1971,13 @@ static const struct video_device wl1273_viddev_template = {
 	.name			= WL1273_FM_DRIVER_NAME,
 	.release		= wl1273_vdev_release,
 	.vfl_dir		= VFL_DIR_TX,
+	.device_caps		= V4L2_CAP_HW_FREQ_SEEK | V4L2_CAP_TUNER |
+				  V4L2_CAP_RADIO | V4L2_CAP_AUDIO |
+				  V4L2_CAP_RDS_CAPTURE | V4L2_CAP_MODULATOR |
+				  V4L2_CAP_RDS_OUTPUT,
 };
 
-static int wl1273_fm_radio_remove(struct platform_device *pdev)
+static void wl1273_fm_radio_remove(struct platform_device *pdev)
 {
 	struct wl1273_device *radio = platform_get_drvdata(pdev);
 	struct wl1273_core *core = radio->core;
@@ -2003,8 +1990,6 @@ static int wl1273_fm_radio_remove(struct platform_device *pdev)
 	v4l2_ctrl_handler_free(&radio->ctrl_handler);
 	video_unregister_device(&radio->videodev);
 	v4l2_device_unregister(&radio->v4l2dev);
-
-	return 0;
 }
 
 static int wl1273_fm_radio_probe(struct platform_device *pdev)
@@ -2160,7 +2145,7 @@ pdata_err:
 
 static struct platform_driver wl1273_fm_radio_driver = {
 	.probe		= wl1273_fm_radio_probe,
-	.remove		= wl1273_fm_radio_remove,
+	.remove_new	= wl1273_fm_radio_remove,
 	.driver		= {
 		.name	= "wl1273_fm_radio",
 	},

@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * drivers/watchdog/shwdt.c
  *
  * Watchdog driver for integrated watchdog in the SuperH processors.
  *
  * Copyright (C) 2001 - 2012  Paul Mundt <lethal@linux-sh.org>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
  *
  * 14-Dec-2001 Matt Domsch <Matt_Domsch@dell.com>
  *     Added nowayout module option to override CONFIG_WATCHDOG_NOWAYOUT
@@ -283,13 +279,11 @@ static int sh_wdt_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int sh_wdt_remove(struct platform_device *pdev)
+static void sh_wdt_remove(struct platform_device *pdev)
 {
 	watchdog_unregister_device(&sh_wdt_dev);
 
 	pm_runtime_disable(&pdev->dev);
-
-	return 0;
 }
 
 static void sh_wdt_shutdown(struct platform_device *pdev)
@@ -303,7 +297,7 @@ static struct platform_driver sh_wdt_driver = {
 	},
 
 	.probe		= sh_wdt_probe,
-	.remove		= sh_wdt_remove,
+	.remove_new	= sh_wdt_remove,
 	.shutdown	= sh_wdt_shutdown,
 };
 

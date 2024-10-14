@@ -32,34 +32,52 @@
 #include "transform.h"
 #include "dpp.h"
 
+#include "dc_plane_priv.h"
+
 /*******************************************************************************
  * Private functions
  ******************************************************************************/
-static void construct(struct dc_context *ctx, struct dc_plane_state *plane_state)
+void dc_plane_construct(struct dc_context *ctx, struct dc_plane_state *plane_state)
 {
 	plane_state->ctx = ctx;
 
-	plane_state->gamma_correction = dc_create_gamma();
-	if (plane_state->gamma_correction != NULL)
-		plane_state->gamma_correction->is_identity = true;
+	plane_state->gamma_correction.is_identity = true;
 
-	plane_state->in_transfer_func = dc_create_transfer_func();
-	if (plane_state->in_transfer_func != NULL) {
-		plane_state->in_transfer_func->type = TF_TYPE_BYPASS;
-		plane_state->in_transfer_func->ctx = ctx;
-	}
+	plane_state->in_transfer_func.type = TF_TYPE_BYPASS;
+
+	plane_state->in_shaper_func.type = TF_TYPE_BYPASS;
+
+	plane_state->lut3d_func.state.raw = 0;
+
+	plane_state->blend_tf.type = TF_TYPE_BYPASS;
+
+	plane_state->pre_multiplied_alpha = true;
+
 }
 
-static void destruct(struct dc_plane_state *plane_state)
+void dc_plane_destruct(struct dc_plane_state *plane_state)
 {
-	if (plane_state->gamma_correction != NULL) {
-		dc_gamma_release(&plane_state->gamma_correction);
+	// no more pointers to free within dc_plane_state
+}
+
+
+/* dc_state is passed in separately since it may differ from the current dc state accessible from plane_state e.g.
+ * if the driver is doing an update from an old context to a new one and the caller wants the pipe mask for the new
+ * context rather than the existing one
+ */
+uint8_t  dc_plane_get_pipe_mask(struct dc_state *dc_state, const struct dc_plane_state *plane_state)
+{
+	uint8_t pipe_mask = 0;
+	int i;
+
+	for (i = 0; i < plane_state->ctx->dc->res_pool->pipe_count; i++) {
+		struct pipe_ctx *pipe_ctx = &dc_state->res_ctx.pipe_ctx[i];
+
+		if (pipe_ctx->plane_state == plane_state && pipe_ctx->plane_res.hubp)
+			pipe_mask |= 1 << pipe_ctx->plane_res.hubp->inst;
 	}
-	if (plane_state->in_transfer_func != NULL) {
-		dc_transfer_func_release(
-				plane_state->in_transfer_func);
-		plane_state->in_transfer_func = NULL;
-	}
+
+	return pipe_mask;
 }
 
 /*******************************************************************************
@@ -72,23 +90,21 @@ void enable_surface_flip_reporting(struct dc_plane_state *plane_state,
 	/*register_flip_interrupt(surface);*/
 }
 
-struct dc_plane_state *dc_create_plane_state(struct dc *dc)
+struct dc_plane_state *dc_create_plane_state(const struct dc *dc)
 {
-	struct dc *core_dc = dc;
-
 	struct dc_plane_state *plane_state = kvzalloc(sizeof(*plane_state),
-						      GFP_KERNEL);
+							GFP_KERNEL);
 
 	if (NULL == plane_state)
 		return NULL;
 
 	kref_init(&plane_state->refcount);
-	construct(core_dc->ctx, plane_state);
+	dc_plane_construct(dc->ctx, plane_state);
 
 	return plane_state;
 }
 
-/**
+/*
  *****************************************************************************
  *  Function: dc_plane_get_status
  *
@@ -103,7 +119,7 @@ const struct dc_plane_status *dc_plane_get_status(
 		const struct dc_plane_state *plane_state)
 {
 	const struct dc_plane_status *plane_status;
-	struct dc  *core_dc;
+	struct dc  *dc;
 	int i;
 
 	if (!plane_state ||
@@ -114,32 +130,35 @@ const struct dc_plane_status *dc_plane_get_status(
 	}
 
 	plane_status = &plane_state->status;
-	core_dc = plane_state->ctx->dc;
+	dc = plane_state->ctx->dc;
 
-	if (core_dc->current_state == NULL)
+	if (dc->current_state == NULL)
 		return NULL;
 
 	/* Find the current plane state and set its pending bit to false */
-	for (i = 0; i < core_dc->res_pool->pipe_count; i++) {
+	for (i = 0; i < dc->res_pool->pipe_count; i++) {
 		struct pipe_ctx *pipe_ctx =
-				&core_dc->current_state->res_ctx.pipe_ctx[i];
+				&dc->current_state->res_ctx.pipe_ctx[i];
 
 		if (pipe_ctx->plane_state != plane_state)
 			continue;
 
-		pipe_ctx->plane_state->status.is_flip_pending = false;
+		if (pipe_ctx->plane_state)
+			pipe_ctx->plane_state->status.is_flip_pending = false;
 
 		break;
 	}
 
-	for (i = 0; i < core_dc->res_pool->pipe_count; i++) {
+	dc_exit_ips_for_hw_access(dc);
+
+	for (i = 0; i < dc->res_pool->pipe_count; i++) {
 		struct pipe_ctx *pipe_ctx =
-				&core_dc->current_state->res_ctx.pipe_ctx[i];
+				&dc->current_state->res_ctx.pipe_ctx[i];
 
 		if (pipe_ctx->plane_state != plane_state)
 			continue;
 
-		core_dc->hwss.update_pending_status(pipe_ctx);
+		dc->hwss.update_pending_status(pipe_ctx);
 	}
 
 	return plane_status;
@@ -153,7 +172,7 @@ void dc_plane_state_retain(struct dc_plane_state *plane_state)
 static void dc_plane_state_free(struct kref *kref)
 {
 	struct dc_plane_state *plane_state = container_of(kref, struct dc_plane_state, refcount);
-	destruct(plane_state);
+	dc_plane_destruct(plane_state);
 	kvfree(plane_state);
 }
 
@@ -222,6 +241,40 @@ struct dc_transfer_func *dc_create_transfer_func(void)
 
 alloc_fail:
 	return NULL;
+}
+
+static void dc_3dlut_func_free(struct kref *kref)
+{
+	struct dc_3dlut *lut = container_of(kref, struct dc_3dlut, refcount);
+
+	kvfree(lut);
+}
+
+struct dc_3dlut *dc_create_3dlut_func(void)
+{
+	struct dc_3dlut *lut = kvzalloc(sizeof(*lut), GFP_KERNEL);
+
+	if (lut == NULL)
+		goto alloc_fail;
+
+	kref_init(&lut->refcount);
+	lut->state.raw = 0;
+
+	return lut;
+
+alloc_fail:
+	return NULL;
+
+}
+
+void dc_3dlut_func_release(struct dc_3dlut *lut)
+{
+	kref_put(&lut->refcount, dc_3dlut_func_free);
+}
+
+void dc_3dlut_func_retain(struct dc_3dlut *lut)
+{
+	kref_get(&lut->refcount);
 }
 
 

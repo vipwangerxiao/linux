@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * ATMEL I2C TPM AT97SC3204T
  *
@@ -13,19 +14,6 @@
  *
  * TGC status/locality/etc functions seen in the LPC implementation do not
  * seem to be present.
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see http://www.gnu.org/licenses/>.
  */
 #include <linux/init.h>
 #include <linux/module.h>
@@ -158,8 +146,7 @@ static const struct tpm_class_ops i2c_atmel = {
 	.req_canceled = i2c_atmel_req_canceled,
 };
 
-static int i2c_atmel_probe(struct i2c_client *client,
-			   const struct i2c_device_id *id)
+static int i2c_atmel_probe(struct i2c_client *client)
 {
 	struct tpm_chip *chip;
 	struct device *dev = &client->dev;
@@ -191,16 +178,15 @@ static int i2c_atmel_probe(struct i2c_client *client,
 	return tpm_chip_register(chip);
 }
 
-static int i2c_atmel_remove(struct i2c_client *client)
+static void i2c_atmel_remove(struct i2c_client *client)
 {
 	struct device *dev = &(client->dev);
 	struct tpm_chip *chip = dev_get_drvdata(dev);
 	tpm_chip_unregister(chip);
-	return 0;
 }
 
 static const struct i2c_device_id i2c_atmel_id[] = {
-	{I2C_DRIVER_NAME, 0},
+	{ I2C_DRIVER_NAME },
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, i2c_atmel_id);

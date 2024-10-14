@@ -125,6 +125,8 @@ struct dw_dma_regs {
 
 /* Bitfields in DWC_PARAMS */
 #define DWC_PARAMS_MBLK_EN	11		/* multi block transfer */
+#define DWC_PARAMS_HC_LLP	13		/* set LLP register to zero */
+#define DWC_PARAMS_MSIZE	16		/* max group transaction size */
 
 /* bursts size */
 enum dw_dma_msize {
@@ -283,6 +285,7 @@ struct dw_dma_chan {
 	/* hardware configuration */
 	unsigned int		block_size;
 	bool			nollp;
+	u32			max_burst;
 
 	/* custom slave configuration */
 	struct dw_dma_slave	dws;
@@ -324,7 +327,6 @@ struct dw_dma {
 	void	(*suspend_chan)(struct dw_dma_chan *dwc, bool drain);
 	void	(*resume_chan)(struct dw_dma_chan *dwc, bool drain);
 	u32	(*prepare_ctllo)(struct dw_dma_chan *dwc);
-	void	(*encode_maxburst)(struct dw_dma_chan *dwc, u32 *maxburst);
 	u32	(*bytes2block)(struct dw_dma_chan *dwc, size_t bytes,
 			       unsigned int width, size_t *len);
 	size_t	(*block2bytes)(struct dw_dma_chan *dwc, u32 block, u32 width);

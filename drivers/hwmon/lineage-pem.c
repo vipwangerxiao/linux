@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Driver for Lineage Compact Power Line series of power entry modules.
  *
@@ -5,20 +6,6 @@
  *
  * Documentation:
  *  http://www.lineagepower.com/oem/pdf/CPLI2C.pdf
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/kernel.h>
@@ -204,7 +191,7 @@ static struct pem_data *pem_update_device(struct device *dev)
 		i2c_smbus_write_byte(client, PEM_CLEAR_INFO_FLAGS);
 
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 	}
 abort:
 	mutex_unlock(&data->update_lock);
@@ -293,7 +280,7 @@ static ssize_t pem_bool_show(struct device *dev, struct device_attribute *da,
 		return PTR_ERR(data);
 
 	status = data->data_string[attr->nr] & attr->index;
-	return snprintf(buf, PAGE_SIZE, "%d\n", !!status);
+	return sysfs_emit(buf, "%d\n", !!status);
 }
 
 static ssize_t pem_data_show(struct device *dev, struct device_attribute *da,
@@ -309,7 +296,7 @@ static ssize_t pem_data_show(struct device *dev, struct device_attribute *da,
 	value = pem_get_data(data->data_string, sizeof(data->data_string),
 			     attr->index);
 
-	return snprintf(buf, PAGE_SIZE, "%ld\n", value);
+	return sysfs_emit(buf, "%ld\n", value);
 }
 
 static ssize_t pem_input_show(struct device *dev, struct device_attribute *da,
@@ -325,7 +312,7 @@ static ssize_t pem_input_show(struct device *dev, struct device_attribute *da,
 	value = pem_get_input(data->input_string, sizeof(data->input_string),
 			      attr->index);
 
-	return snprintf(buf, PAGE_SIZE, "%ld\n", value);
+	return sysfs_emit(buf, "%ld\n", value);
 }
 
 static ssize_t pem_fan_show(struct device *dev, struct device_attribute *da,
@@ -341,7 +328,7 @@ static ssize_t pem_fan_show(struct device *dev, struct device_attribute *da,
 	value = pem_get_fan(data->fan_speed, sizeof(data->fan_speed),
 			    attr->index);
 
-	return snprintf(buf, PAGE_SIZE, "%ld\n", value);
+	return sysfs_emit(buf, "%ld\n", value);
 }
 
 /* Voltages */
@@ -430,8 +417,7 @@ static const struct attribute_group pem_fan_group = {
 	.attrs = pem_fan_attributes,
 };
 
-static int pem_probe(struct i2c_client *client,
-		     const struct i2c_device_id *id)
+static int pem_probe(struct i2c_client *client)
 {
 	struct i2c_adapter *adapter = client->adapter;
 	struct device *dev = &client->dev;
@@ -516,7 +502,7 @@ static int pem_probe(struct i2c_client *client,
 }
 
 static const struct i2c_device_id pem_id[] = {
-	{"lineage_pem", 0},
+	{"lineage_pem"},
 	{}
 };
 MODULE_DEVICE_TABLE(i2c, pem_id);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Copyright (c) 1998-2001 Vojtech Pavlik
  *
@@ -7,22 +8,6 @@
 
 /*
  * TurboGraFX parallel port interface driver for Linux.
- */
-
-/*
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #include <linux/kernel.h>
@@ -187,7 +172,7 @@ static void tgfx_attach(struct parport *pp)
 		return;
 	}
 
-	tgfx = kzalloc(sizeof(struct tgfx), GFP_KERNEL);
+	tgfx = kzalloc(sizeof(*tgfx), GFP_KERNEL);
 	if (!tgfx) {
 		printk(KERN_ERR "turbografx.c: Not enough memory\n");
 		goto err_unreg_pardev;
@@ -289,7 +274,6 @@ static struct parport_driver tgfx_parport_driver = {
 	.name = "turbografx",
 	.match_port = tgfx_attach,
 	.detach = tgfx_detach,
-	.devmodel = true,
 };
 
 static int __init tgfx_init(void)

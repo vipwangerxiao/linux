@@ -1,15 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * DMA Engine test module
  *
  * Copyright (C) 2007 Atmel Corporation
  * Copyright (C) 2013 Intel Corporation
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/err.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmaengine.h>
@@ -23,52 +21,55 @@
 #include <linux/slab.h>
 #include <linux/wait.h>
 
+static bool nobounce;
+module_param(nobounce, bool, 0644);
+MODULE_PARM_DESC(nobounce, "Prevent using swiotlb buffer (default: use swiotlb buffer)");
+
 static unsigned int test_buf_size = 16384;
-module_param(test_buf_size, uint, S_IRUGO | S_IWUSR);
+module_param(test_buf_size, uint, 0644);
 MODULE_PARM_DESC(test_buf_size, "Size of the memcpy test buffer");
 
 static char test_device[32];
-module_param_string(device, test_device, sizeof(test_device),
-		S_IRUGO | S_IWUSR);
+module_param_string(device, test_device, sizeof(test_device), 0644);
 MODULE_PARM_DESC(device, "Bus ID of the DMA Engine to test (default: any)");
 
 static unsigned int threads_per_chan = 1;
-module_param(threads_per_chan, uint, S_IRUGO | S_IWUSR);
+module_param(threads_per_chan, uint, 0644);
 MODULE_PARM_DESC(threads_per_chan,
 		"Number of threads to start per channel (default: 1)");
 
 static unsigned int max_channels;
-module_param(max_channels, uint, S_IRUGO | S_IWUSR);
+module_param(max_channels, uint, 0644);
 MODULE_PARM_DESC(max_channels,
 		"Maximum number of channels to use (default: all)");
 
 static unsigned int iterations;
-module_param(iterations, uint, S_IRUGO | S_IWUSR);
+module_param(iterations, uint, 0644);
 MODULE_PARM_DESC(iterations,
 		"Iterations before stopping test (default: infinite)");
 
 static unsigned int dmatest;
-module_param(dmatest, uint, S_IRUGO | S_IWUSR);
+module_param(dmatest, uint, 0644);
 MODULE_PARM_DESC(dmatest,
 		"dmatest 0-memcpy 1-memset (default: 0)");
 
 static unsigned int xor_sources = 3;
-module_param(xor_sources, uint, S_IRUGO | S_IWUSR);
+module_param(xor_sources, uint, 0644);
 MODULE_PARM_DESC(xor_sources,
 		"Number of xor source buffers (default: 3)");
 
 static unsigned int pq_sources = 3;
-module_param(pq_sources, uint, S_IRUGO | S_IWUSR);
+module_param(pq_sources, uint, 0644);
 MODULE_PARM_DESC(pq_sources,
 		"Number of p+q source buffers (default: 3)");
 
 static int timeout = 3000;
-module_param(timeout, uint, S_IRUGO | S_IWUSR);
+module_param(timeout, int, 0644);
 MODULE_PARM_DESC(timeout, "Transfer Timeout in msec (default: 3000), "
 		 "Pass -1 for infinite timeout");
 
 static bool noverify;
-module_param(noverify, bool, S_IRUGO | S_IWUSR);
+module_param(noverify, bool, 0644);
 MODULE_PARM_DESC(noverify, "Disable data verification (default: verify)");
 
 static bool norandom;
@@ -76,7 +77,7 @@ module_param(norandom, bool, 0644);
 MODULE_PARM_DESC(norandom, "Disable random offset setup (default: random)");
 
 static bool verbose;
-module_param(verbose, bool, S_IRUGO | S_IWUSR);
+module_param(verbose, bool, 0644);
 MODULE_PARM_DESC(verbose, "Enable \"success\" result messages (default: off)");
 
 static int alignment = -1;
@@ -87,8 +88,13 @@ static unsigned int transfer_size;
 module_param(transfer_size, uint, 0644);
 MODULE_PARM_DESC(transfer_size, "Optional custom transfer size in bytes (default: not used (0))");
 
+static bool polled;
+module_param(polled, bool, 0644);
+MODULE_PARM_DESC(polled, "Use polling for completion instead of interrupts");
+
 /**
  * struct dmatest_params - test parameters.
+ * @nobounce:		prevent using swiotlb buffer
  * @buf_size:		size of the memcpy test buffer
  * @channel:		bus ID of the channel to test
  * @device:		bus ID of the DMA Engine to test
@@ -98,8 +104,14 @@ MODULE_PARM_DESC(transfer_size, "Optional custom transfer size in bytes (default
  * @xor_sources:	number of xor source buffers
  * @pq_sources:		number of p+q source buffers
  * @timeout:		transfer timeout in msec, -1 for infinite timeout
+ * @noverify:		disable data verification
+ * @norandom:		disable random offset setup
+ * @alignment:		custom data address alignment taken as 2^alignment
+ * @transfer_size:	custom transfer size in bytes
+ * @polled:		use polling for completion instead of interrupts
  */
 struct dmatest_params {
+	bool		nobounce;
 	unsigned int	buf_size;
 	char		channel[20];
 	char		device[32];
@@ -113,12 +125,17 @@ struct dmatest_params {
 	bool		norandom;
 	int		alignment;
 	unsigned int	transfer_size;
+	bool		polled;
 };
 
 /**
  * struct dmatest_info - test information.
  * @params:		test parameters
+ * @channels:		channels under test
+ * @nr_channels:	number of channels under test
  * @lock:		access protection to the fields of this structure
+ * @did_init:		module has been initialized completely
+ * @last_error:		test has faced configuration issues
  */
 static struct dmatest_info {
 	/* Test parameters */
@@ -127,6 +144,7 @@ static struct dmatest_info {
 	/* Internal state */
 	struct list_head	channels;
 	unsigned int		nr_channels;
+	int			last_error;
 	struct mutex		lock;
 	bool			did_init;
 } test_info = {
@@ -141,7 +159,7 @@ static const struct kernel_param_ops run_ops = {
 	.get = dmatest_run_get,
 };
 static bool dmatest_run;
-module_param_cb(run, &run_ops, &dmatest_run, S_IRUGO | S_IWUSR);
+module_param_cb(run, &run_ops, &dmatest_run, 0644);
 MODULE_PARM_DESC(run, "Run the test (default: false)");
 
 static int dmatest_chan_set(const char *val, const struct kernel_param *kp);
@@ -203,6 +221,7 @@ struct dmatest_done {
 struct dmatest_data {
 	u8		**raw;
 	u8		**aligned;
+	gfp_t		gfp_flags;
 	unsigned int	cnt;
 	unsigned int	off;
 };
@@ -238,7 +257,7 @@ static bool is_threaded_test_run(struct dmatest_info *info)
 		struct dmatest_thread *thread;
 
 		list_for_each_entry(thread, &dtc->threads, node) {
-			if (!thread->done)
+			if (!thread->done && !thread->pending)
 				return true;
 		}
 	}
@@ -277,7 +296,7 @@ static const struct kernel_param_ops wait_ops = {
 	.get = dmatest_wait_get,
 	.set = param_set_bool,
 };
-module_param_cb(wait, &wait_ops, &wait, S_IRUGO);
+module_param_cb(wait, &wait_ops, &wait, 0444);
 MODULE_PARM_DESC(wait, "Wait for tests to complete (default: false)");
 
 static bool dmatest_match_channel(struct dmatest_params *params,
@@ -300,7 +319,7 @@ static unsigned long dmatest_random(void)
 {
 	unsigned long buf;
 
-	prandom_bytes(&buf, sizeof(buf));
+	get_random_bytes(&buf, sizeof(buf));
 	return buf;
 }
 
@@ -442,8 +461,13 @@ static unsigned int min_odd(unsigned int x, unsigned int y)
 static void result(const char *err, unsigned int n, unsigned int src_off,
 		   unsigned int dst_off, unsigned int len, unsigned long data)
 {
-	pr_info("%s: result #%u: '%s' with src_off=0x%x dst_off=0x%x len=0x%x (%lu)\n",
-		current->comm, n, err, src_off, dst_off, len, data);
+	if (IS_ERR_VALUE(data)) {
+		pr_info("%s: result #%u: '%s' with src_off=0x%x dst_off=0x%x len=0x%x (%ld)\n",
+			current->comm, n, err, src_off, dst_off, len, data);
+	} else {
+		pr_info("%s: result #%u: '%s' with src_off=0x%x dst_off=0x%x len=0x%x (%lu)\n",
+			current->comm, n, err, src_off, dst_off, len, data);
+	}
 }
 
 static void dbg_result(const char *err, unsigned int n, unsigned int src_off,
@@ -476,7 +500,7 @@ static unsigned long long dmatest_persec(s64 runtime, unsigned int val)
 
 	per_sec *= val;
 	per_sec = INT_TO_FIXPT(per_sec);
-	do_div(per_sec, runtime);
+	do_div(per_sec, (u32)runtime);
 
 	return per_sec;
 }
@@ -516,7 +540,7 @@ static int dmatest_alloc_test_data(struct dmatest_data *d,
 		goto err;
 
 	for (i = 0; i < d->cnt; i++) {
-		d->raw[i] = kmalloc(buf_size + align, GFP_KERNEL);
+		d->raw[i] = kmalloc(buf_size + align, d->gfp_flags);
 		if (!d->raw[i])
 			goto err;
 
@@ -555,15 +579,16 @@ static int dmatest_func(void *data)
 	struct dmatest_params	*params;
 	struct dma_chan		*chan;
 	struct dma_device	*dev;
+	struct device		*dma_dev;
 	unsigned int		error_count;
 	unsigned int		failed_tests = 0;
 	unsigned int		total_tests = 0;
 	dma_cookie_t		cookie;
 	enum dma_status		status;
-	enum dma_ctrl_flags 	flags;
+	enum dma_ctrl_flags	flags;
 	u8			*pq_coefs = NULL;
 	int			ret;
-	unsigned int 		buf_size;
+	unsigned int		buf_size;
 	struct dmatest_data	*src;
 	struct dmatest_data	*dst;
 	int			i;
@@ -588,6 +613,8 @@ static int dmatest_func(void *data)
 	params = &info->params;
 	chan = thread->chan;
 	dev = chan->device;
+	dma_dev = dmaengine_get_dma_device(chan);
+
 	src = &thread->src;
 	dst = &thread->dst;
 	if (thread->type == DMA_MEMCPY) {
@@ -635,6 +662,13 @@ static int dmatest_func(void *data)
 		goto err_free_coefs;
 	}
 
+	src->gfp_flags = GFP_KERNEL;
+	dst->gfp_flags = GFP_KERNEL;
+	if (params->nobounce) {
+		src->gfp_flags = GFP_DMA;
+		dst->gfp_flags = GFP_DMA;
+	}
+
 	if (dmatest_alloc_test_data(src, buf_size, align) < 0)
 		goto err_free_coefs;
 
@@ -654,11 +688,14 @@ static int dmatest_func(void *data)
 	/*
 	 * src and dst buffers are freed by ourselves below
 	 */
-	flags = DMA_CTRL_ACK | DMA_PREP_INTERRUPT;
+	if (params->polled)
+		flags = DMA_CTRL_ACK;
+	else
+		flags = DMA_CTRL_ACK | DMA_PREP_INTERRUPT;
 
 	ktime = ktime_get();
-	while (!kthread_should_stop()
-	       && !(params->iterations && total_tests >= params->iterations)) {
+	while (!(kthread_should_stop() ||
+	       (params->iterations && total_tests >= params->iterations))) {
 		struct dma_async_tx_descriptor *tx = NULL;
 		struct dmaengine_unmap_data *um;
 		dma_addr_t *dsts;
@@ -709,7 +746,7 @@ static int dmatest_func(void *data)
 			filltime = ktime_add(filltime, diff);
 		}
 
-		um = dmaengine_get_unmap_data(dev->dev, src->cnt + dst->cnt,
+		um = dmaengine_get_unmap_data(dma_dev, src->cnt + dst->cnt,
 					      GFP_KERNEL);
 		if (!um) {
 			failed_tests++;
@@ -724,10 +761,10 @@ static int dmatest_func(void *data)
 			struct page *pg = virt_to_page(buf);
 			unsigned long pg_off = offset_in_page(buf);
 
-			um->addr[i] = dma_map_page(dev->dev, pg, pg_off,
+			um->addr[i] = dma_map_page(dma_dev, pg, pg_off,
 						   um->len, DMA_TO_DEVICE);
 			srcs[i] = um->addr[i] + src->off;
-			ret = dma_mapping_error(dev->dev, um->addr[i]);
+			ret = dma_mapping_error(dma_dev, um->addr[i]);
 			if (ret) {
 				result("src mapping error", total_tests,
 				       src->off, dst->off, len, ret);
@@ -742,9 +779,9 @@ static int dmatest_func(void *data)
 			struct page *pg = virt_to_page(buf);
 			unsigned long pg_off = offset_in_page(buf);
 
-			dsts[i] = dma_map_page(dev->dev, pg, pg_off, um->len,
+			dsts[i] = dma_map_page(dma_dev, pg, pg_off, um->len,
 					       DMA_BIDIRECTIONAL);
-			ret = dma_mapping_error(dev->dev, dsts[i]);
+			ret = dma_mapping_error(dma_dev, dsts[i]);
 			if (ret) {
 				result("dst mapping error", total_tests,
 				       src->off, dst->off, len, ret);
@@ -783,8 +820,10 @@ static int dmatest_func(void *data)
 		}
 
 		done->done = false;
-		tx->callback = dmatest_callback;
-		tx->callback_param = done;
+		if (!params->polled) {
+			tx->callback = dmatest_callback;
+			tx->callback_param = done;
+		}
 		cookie = tx->tx_submit(tx);
 
 		if (dma_submit_error(cookie)) {
@@ -793,18 +832,31 @@ static int dmatest_func(void *data)
 			msleep(100);
 			goto error_unmap_continue;
 		}
-		dma_async_issue_pending(chan);
 
-		wait_event_freezable_timeout(thread->done_wait, done->done,
-					     msecs_to_jiffies(params->timeout));
+		if (params->polled) {
+			status = dma_sync_wait(chan, cookie);
+			dmaengine_terminate_sync(chan);
+			if (status == DMA_COMPLETE)
+				done->done = true;
+		} else {
+			dma_async_issue_pending(chan);
 
-		status = dma_async_is_tx_complete(chan, cookie, NULL, NULL);
+			wait_event_freezable_timeout(thread->done_wait,
+					done->done,
+					msecs_to_jiffies(params->timeout));
+
+			status = dma_async_is_tx_complete(chan, cookie, NULL,
+							  NULL);
+		}
 
 		if (!done->done) {
 			result("test timed out", total_tests, src->off, dst->off,
 			       len, 0);
 			goto error_unmap_continue;
-		} else if (status != DMA_COMPLETE) {
+		} else if (status != DMA_COMPLETE &&
+			   !(dma_has_cap(DMA_COMPLETION_NO_ORDER,
+					 dev->cap_mask) &&
+			     status == DMA_OUT_OF_ORDER)) {
 			result(status == DMA_ERROR ?
 			       "completion error status" :
 			       "completion busy status", total_tests, src->off,
@@ -982,6 +1034,12 @@ static int dmatest_add_channel(struct dmatest_info *info,
 	dtc->chan = chan;
 	INIT_LIST_HEAD(&dtc->threads);
 
+	if (dma_has_cap(DMA_COMPLETION_NO_ORDER, dma_dev->cap_mask) &&
+	    info->params.polled) {
+		info->params.polled = false;
+		pr_warn("DMA_COMPLETION_NO_ORDER, polled disabled\n");
+	}
+
 	if (dma_has_cap(DMA_MEMCPY, dma_dev->cap_mask)) {
 		if (dmatest == 0) {
 			cnt = dmatest_add_threads(info, dtc, DMA_MEMCPY);
@@ -1016,13 +1074,7 @@ static int dmatest_add_channel(struct dmatest_info *info,
 
 static bool filter(struct dma_chan *chan, void *param)
 {
-	struct dmatest_params *params = param;
-
-	if (!dmatest_match_channel(params, chan) ||
-	    !dmatest_match_device(params, chan->device))
-		return false;
-	else
-		return true;
+	return dmatest_match_channel(param, chan) && dmatest_match_device(param, chan->device);
 }
 
 static void request_channels(struct dmatest_info *info,
@@ -1055,9 +1107,10 @@ static void add_threaded_test(struct dmatest_info *info)
 	struct dmatest_params *params = &info->params;
 
 	/* Copy test parameters */
+	params->nobounce = nobounce;
 	params->buf_size = test_buf_size;
-	strlcpy(params->channel, strim(test_channel), sizeof(params->channel));
-	strlcpy(params->device, strim(test_device), sizeof(params->device));
+	strscpy(params->channel, strim(test_channel), sizeof(params->channel));
+	strscpy(params->device, strim(test_device), sizeof(params->device));
 	params->threads_per_chan = threads_per_chan;
 	params->max_channels = max_channels;
 	params->iterations = iterations;
@@ -1068,6 +1121,7 @@ static void add_threaded_test(struct dmatest_info *info)
 	params->norandom = norandom;
 	params->alignment = alignment;
 	params->transfer_size = transfer_size;
+	params->polled = polled;
 
 	request_channels(info, DMA_MEMCPY);
 	request_channels(info, DMA_MEMSET);
@@ -1148,10 +1202,25 @@ static int dmatest_run_set(const char *val, const struct kernel_param *kp)
 		mutex_unlock(&info->lock);
 		return ret;
 	} else if (dmatest_run) {
-		if (is_threaded_test_pending(info))
-			start_threaded_tests(info);
-		else
-			pr_info("Could not start test, no channels configured\n");
+		if (!is_threaded_test_pending(info)) {
+			/*
+			 * We have nothing to run. This can be due to:
+			 */
+			ret = info->last_error;
+			if (ret) {
+				/* 1) Misconfiguration */
+				pr_err("Channel misconfigured, can't continue\n");
+				mutex_unlock(&info->lock);
+				return ret;
+			} else {
+				/* 2) We rely on defaults */
+				pr_info("No channels configured, continue with any\n");
+				if (!is_threaded_test_run(info))
+					stop_threaded_test(info);
+				add_threaded_test(info);
+			}
+		}
+		start_threaded_tests(info);
 	} else {
 		stop_threaded_test(info);
 	}
@@ -1166,7 +1235,7 @@ static int dmatest_chan_set(const char *val, const struct kernel_param *kp)
 	struct dmatest_info *info = &test_info;
 	struct dmatest_chan *dtc;
 	char chan_reset_val[20];
-	int ret = 0;
+	int ret;
 
 	mutex_lock(&info->lock);
 	ret = param_set_copystring(val, kp);
@@ -1185,7 +1254,7 @@ static int dmatest_chan_set(const char *val, const struct kernel_param *kp)
 				dtc = list_last_entry(&info->channels,
 						      struct dmatest_chan,
 						      node);
-				strlcpy(chan_reset_val,
+				strscpy(chan_reset_val,
 					dma_chan_name(dtc->chan),
 					sizeof(chan_reset_val));
 				ret = -EBUSY;
@@ -1197,36 +1266,37 @@ static int dmatest_chan_set(const char *val, const struct kernel_param *kp)
 	add_threaded_test(info);
 
 	/* Check if channel was added successfully */
-	dtc = list_last_entry(&info->channels, struct dmatest_chan, node);
-
-	if (dtc->chan) {
+	if (!list_empty(&info->channels)) {
 		/*
 		 * if new channel was not successfully added, revert the
 		 * "test_channel" string to the name of the last successfully
 		 * added channel. exception for when users issues empty string
 		 * to channel parameter.
 		 */
+		dtc = list_last_entry(&info->channels, struct dmatest_chan, node);
 		if ((strcmp(dma_chan_name(dtc->chan), strim(test_channel)) != 0)
 		    && (strcmp("", strim(test_channel)) != 0)) {
 			ret = -EINVAL;
-			strlcpy(chan_reset_val, dma_chan_name(dtc->chan),
+			strscpy(chan_reset_val, dma_chan_name(dtc->chan),
 				sizeof(chan_reset_val));
 			goto add_chan_err;
 		}
 
 	} else {
 		/* Clear test_channel if no channels were added successfully */
-		strlcpy(chan_reset_val, "", sizeof(chan_reset_val));
+		strscpy(chan_reset_val, "", sizeof(chan_reset_val));
 		ret = -EBUSY;
 		goto add_chan_err;
 	}
 
+	info->last_error = ret;
 	mutex_unlock(&info->lock);
 
 	return ret;
 
 add_chan_err:
 	param_set_copystring(chan_reset_val, kp);
+	info->last_error = ret;
 	mutex_unlock(&info->lock);
 
 	return ret;
@@ -1239,7 +1309,7 @@ static int dmatest_chan_get(char *val, const struct kernel_param *kp)
 	mutex_lock(&info->lock);
 	if (!is_threaded_test_run(info) && !is_threaded_test_pending(info)) {
 		stop_threaded_test(info);
-		strlcpy(test_channel, "", sizeof(test_channel));
+		strscpy(test_channel, "", sizeof(test_channel));
 	}
 	mutex_unlock(&info->lock);
 
@@ -1302,4 +1372,5 @@ static void __exit dmatest_exit(void)
 module_exit(dmatest_exit);
 
 MODULE_AUTHOR("Haavard Skinnemoen (Atmel)");
+MODULE_DESCRIPTION("DMA Engine test module");
 MODULE_LICENSE("GPL v2");

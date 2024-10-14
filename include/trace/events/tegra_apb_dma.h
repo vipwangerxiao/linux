@@ -1,5 +1,5 @@
 #if !defined(_TRACE_TEGRA_APB_DMA_H) || defined(TRACE_HEADER_MULTI_READ)
-#define _TRACE_TEGRA_APM_DMA_H
+#define _TRACE_TEGRA_APB_DMA_H
 
 #include <linux/tracepoint.h>
 #include <linux/dmaengine.h>
@@ -16,7 +16,7 @@ TRACE_EVENT(tegra_dma_tx_status,
 		__field(__u32,	residue)
 	),
 	TP_fast_assign(
-		__assign_str(chan, dev_name(&dc->dev->device));
+		__assign_str(chan);
 		__entry->cookie = cookie;
 		__entry->residue = state ? state->residue : (u32)-1;
 	),
@@ -33,7 +33,7 @@ TRACE_EVENT(tegra_dma_complete_cb,
 		__field(void *,	ptr)
 		),
 	TP_fast_assign(
-		__assign_str(chan, dev_name(&dc->dev->device));
+		__assign_str(chan);
 		__entry->count = count;
 		__entry->ptr = ptr;
 		),
@@ -49,13 +49,13 @@ TRACE_EVENT(tegra_dma_isr,
 		__field(int,	irq)
 	),
 	TP_fast_assign(
-		__assign_str(chan, dev_name(&dc->dev->device));
+		__assign_str(chan);
 		__entry->irq = irq;
 	),
 	TP_printk("%s: irq %d\n",  __get_str(chan), __entry->irq)
 );
 
-#endif /*  _TRACE_TEGRADMA_H */
+#endif /* _TRACE_TEGRA_APB_DMA_H */
 
 /* This part must be outside protection */
 #include <trace/define_trace.h>

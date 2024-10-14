@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for Semtech SX8654 I2C touchscreen controller.
  *
@@ -21,10 +22,6 @@
  *      Copyright (C) 2002 MontaVista Software
  *      Copyright (C) 2004 Texas Instruments
  *      Copyright (C) 2005 Dirk Behme
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation.
  */
 
 #include <linux/bitops.h>
@@ -309,9 +306,9 @@ static void sx8654_close(struct input_dev *dev)
 	}
 }
 
-static int sx8654_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int sx8654_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct sx8654 *sx8654;
 	struct input_dev *input;
 	int error;
@@ -326,13 +323,9 @@ static int sx8654_probe(struct i2c_client *client,
 
 	sx8654->gpio_reset = devm_gpiod_get_optional(&client->dev, "reset",
 						     GPIOD_OUT_HIGH);
-	if (IS_ERR(sx8654->gpio_reset)) {
-		error = PTR_ERR(sx8654->gpio_reset);
-		if (error != -EPROBE_DEFER)
-			dev_err(&client->dev, "unable to get reset-gpio: %d\n",
-				error);
-		return error;
-	}
+	if (IS_ERR(sx8654->gpio_reset))
+		return dev_err_probe(&client->dev, PTR_ERR(sx8654->gpio_reset),
+				     "unable to get reset-gpio\n");
 	dev_dbg(&client->dev, "got GPIO reset pin\n");
 
 	sx8654->data = device_get_match_data(&client->dev);

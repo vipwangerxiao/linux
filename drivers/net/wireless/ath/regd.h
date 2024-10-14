@@ -28,7 +28,6 @@ enum ctl_group {
 	CTL_ETSI = 0x30,
 };
 
-#define NO_CTL 0xff
 #define SD_NO_CTL               0xE0
 #define NO_CTL                  0xff
 #define CTL_11A                 0
@@ -127,6 +126,7 @@ enum CountryCode {
 	CTRY_KOREA_ROC = 410,
 	CTRY_KOREA_ROC2 = 411,
 	CTRY_KOREA_ROC3 = 412,
+	CTRY_KOREA_ROC4 = 413,
 	CTRY_KUWAIT = 414,
 	CTRY_LATVIA = 428,
 	CTRY_LEBANON = 422,

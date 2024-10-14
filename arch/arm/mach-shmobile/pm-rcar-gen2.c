@@ -46,15 +46,16 @@ void __init rcar_gen2_pm_init(void)
 {
 	void __iomem *p;
 	u32 bar;
-	static int once;
 	struct device_node *np;
 	bool has_a7 = false;
 	bool has_a15 = false;
 	struct resource res;
 	int error;
 
-	if (once++)
+	if (!request_mem_region(0, SZ_256K, "Boot Area")) {
+		pr_err("Failed to request boot area\n");
 		return;
+	}
 
 	for_each_of_cpu_node(np) {
 		if (of_device_is_compatible(np, "arm,cortex-a15"))
@@ -72,6 +73,7 @@ void __init rcar_gen2_pm_init(void)
 	}
 
 	error = of_address_to_resource(np, 0, &res);
+	of_node_put(np);
 	if (error) {
 		pr_err("Failed to get smp-sram address: %d\n", error);
 		return;
@@ -102,7 +104,7 @@ map:
 	iounmap(p);
 
 	/* setup reset vectors */
-	p = ioremap_nocache(RST, 0x63);
+	p = ioremap(RST, 0x63);
 	bar = phys_to_sbar(res.start);
 	if (has_a15) {
 		writel_relaxed(bar, p + CA15BAR);

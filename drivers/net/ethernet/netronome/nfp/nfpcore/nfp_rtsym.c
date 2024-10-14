@@ -10,7 +10,7 @@
  *          Francois H. Theron <francois.theron@netronome.com>
  */
 
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -213,7 +213,7 @@ u64 nfp_rtsym_size(const struct nfp_rtsym *sym)
 		return 0;
 	default:
 		pr_warn("rtsym '%s': unknown type: %d\n", sym->name, sym->type);
-		/* fall through */
+		fallthrough;
 	case NFP_RTSYM_TYPE_OBJECT:
 	case NFP_RTSYM_TYPE_FUNCTION:
 		return sym->size;

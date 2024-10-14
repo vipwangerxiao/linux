@@ -1,22 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2009, Steven Rostedt <srostedt@redhat.com>
- *
- * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; version 2 of the License (not later!)
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- *
- * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 #include <dirent.h>
 #include <stdio.h>
@@ -27,14 +11,14 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/mman.h>
+#include <traceevent/event-parse.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
 
-#include "../perf.h"
-#include "util.h"
 #include "trace-event.h"
 #include "debug.h"
+#include "util.h"
 
 static int input_fd;
 
@@ -93,7 +77,7 @@ static void skip(int size)
 		r = size > BUFSIZ ? BUFSIZ : size;
 		do_read(buf, r);
 		size -= r;
-	};
+	}
 }
 
 static unsigned int read4(struct tep_handle *pevent)
@@ -379,6 +363,7 @@ static int read_saved_cmdline(struct tep_handle *pevent)
 		pr_debug("error reading saved cmdlines\n");
 		goto out;
 	}
+	buf[ret] = '\0';
 
 	parse_saved_cmdline(pevent, buf, size);
 	ret = 0;
@@ -431,7 +416,7 @@ ssize_t trace_report(int fd, struct trace_event *tevent, bool __repipe)
 		return -1;
 	}
 	file_bigendian = buf[0];
-	host_bigendian = bigendian();
+	host_bigendian = host_is_bigendian() ? 1 : 0;
 
 	if (trace_event__init(tevent)) {
 		pr_debug("trace_event__init failed");

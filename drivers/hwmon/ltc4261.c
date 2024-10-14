@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Driver for Linear Technology LTC4261 I2C Negative Voltage Hot Swap Controller
  *
@@ -9,20 +10,6 @@
  *  Copyright (C) 2008 Ira W. Snyder <iws@ovro.caltech.edu>
  *
  * Datasheet: http://cds.linear.com/docs/Datasheet/42612fb.pdf
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/kernel.h>
@@ -86,13 +73,13 @@ static struct ltc4261_data *ltc4261_update_device(struct device *dev)
 					"Failed to read ADC value: error %d\n",
 					val);
 				ret = ERR_PTR(val);
-				data->valid = 0;
+				data->valid = false;
 				goto abort;
 			}
 			data->regs[i] = val;
 		}
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 	}
 abort:
 	mutex_unlock(&data->update_lock);
@@ -143,7 +130,7 @@ static ssize_t ltc4261_value_show(struct device *dev,
 		return PTR_ERR(data);
 
 	value = ltc4261_get_value(data, attr->index);
-	return snprintf(buf, PAGE_SIZE, "%d\n", value);
+	return sysfs_emit(buf, "%d\n", value);
 }
 
 static ssize_t ltc4261_bool_show(struct device *dev,
@@ -160,7 +147,7 @@ static ssize_t ltc4261_bool_show(struct device *dev,
 	if (fault)		/* Clear reported faults in chip register */
 		i2c_smbus_write_byte_data(data->client, LTC4261_FAULT, ~fault);
 
-	return snprintf(buf, PAGE_SIZE, "%d\n", fault ? 1 : 0);
+	return sysfs_emit(buf, "%d\n", fault ? 1 : 0);
 }
 
 /*
@@ -203,8 +190,7 @@ static struct attribute *ltc4261_attrs[] = {
 };
 ATTRIBUTE_GROUPS(ltc4261);
 
-static int ltc4261_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int ltc4261_probe(struct i2c_client *client)
 {
 	struct i2c_adapter *adapter = client->adapter;
 	struct device *dev = &client->dev;
@@ -236,7 +222,7 @@ static int ltc4261_probe(struct i2c_client *client,
 }
 
 static const struct i2c_device_id ltc4261_id[] = {
-	{"ltc4261", 0},
+	{"ltc4261"},
 	{}
 };
 

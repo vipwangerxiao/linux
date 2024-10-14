@@ -1,22 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * lm78.c - Part of lm_sensors, Linux kernel modules for hardware
  *	    monitoring
  * Copyright (c) 1998, 1999  Frodo Looijaard <frodol@dds.nl>
  * Copyright (c) 2007, 2011  Jean Delvare <jdelvare@suse.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -130,7 +117,7 @@ struct lm78_data {
 	int isa_addr;
 
 	struct mutex update_lock;
-	char valid;		/* !=0 if following fields are valid */
+	bool valid;		/* true if following fields are valid */
 	unsigned long last_updated;	/* In jiffies */
 
 	u8 in[7];		/* Register value */
@@ -630,7 +617,7 @@ static int lm78_i2c_detect(struct i2c_client *client,
 	if (isa)
 		mutex_unlock(&isa->update_lock);
 
-	strlcpy(info->type, client_name, I2C_NAME_SIZE);
+	strscpy(info->type, client_name, I2C_NAME_SIZE);
 
 	return 0;
 
@@ -640,8 +627,7 @@ static int lm78_i2c_detect(struct i2c_client *client,
 	return -ENODEV;
 }
 
-static int lm78_i2c_probe(struct i2c_client *client,
-			  const struct i2c_device_id *id)
+static int lm78_i2c_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
@@ -652,7 +638,7 @@ static int lm78_i2c_probe(struct i2c_client *client,
 		return -ENOMEM;
 
 	data->client = client;
-	data->type = id->driver_data;
+	data->type = (uintptr_t)i2c_get_match_data(client);
 
 	/* Initialize the LM78 chip */
 	lm78_init_device(data);
@@ -784,7 +770,7 @@ static struct lm78_data *lm78_update_device(struct device *dev)
 		data->alarms = lm78_read_value(data, LM78_REG_ALARM1) +
 		    (lm78_read_value(data, LM78_REG_ALARM2) << 8);
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 
 		data->fan_div[2] = 1;
 	}

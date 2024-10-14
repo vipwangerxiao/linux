@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * smsc47m1.c - Part of lm_sensors, Linux kernel modules
  *		for hardware monitoring
@@ -10,20 +11,6 @@
  * Copyright (C) 2004-2007 Jean Delvare <jdelvare@suse.de>
  * Ported to Linux 2.6 by Gabriele Gorla <gorlik@yahoo.com>
  *			and Jean Delvare
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -46,7 +33,7 @@ static unsigned short force_id;
 module_param(force_id, ushort, 0);
 MODULE_PARM_DESC(force_id, "Override the detected device ID");
 
-static struct platform_device *pdev;
+static struct platform_device *smsc47m1_pdev;
 
 #define DRVNAME "smsc47m1"
 enum chips { smsc47m1, smsc47m2 };
@@ -364,6 +351,8 @@ static ssize_t fan_div_store(struct device *dev,
 		tmp |= data->fan_div[2] << 4;
 		smsc47m1_write_value(data, SMSC47M2_REG_FANDIV3, tmp);
 		break;
+	default:
+		BUG();
 	}
 
 	/* Preserve fan min */
@@ -693,7 +682,7 @@ static int __init smsc47m1_handle_resources(unsigned short address,
 			/* Request the resources */
 			if (!devm_request_region(dev, start, len, DRVNAME)) {
 				dev_err(dev,
-					"Region 0x%hx-0x%hx already in use!\n",
+					"Region 0x%x-0x%x already in use!\n",
 					start, start + len);
 				return -EBUSY;
 			}
@@ -851,70 +840,57 @@ error_remove_files:
 	return err;
 }
 
-static int __exit smsc47m1_remove(struct platform_device *pdev)
+static void __exit smsc47m1_remove(struct platform_device *pdev)
 {
 	struct smsc47m1_data *data = platform_get_drvdata(pdev);
 
 	hwmon_device_unregister(data->hwmon_dev);
 	smsc47m1_remove_files(&pdev->dev);
-
-	return 0;
 }
 
-static struct platform_driver smsc47m1_driver = {
+/*
+ * smsc47m1_remove() lives in .exit.text. For drivers registered via
+ * module_platform_driver_probe() this ok because they cannot get unbound at
+ * runtime. The driver needs to be marked with __refdata, otherwise modpost
+ * triggers a section mismatch warning.
+ */
+static struct platform_driver smsc47m1_driver __refdata = {
 	.driver = {
 		.name	= DRVNAME,
 	},
-	.remove		= __exit_p(smsc47m1_remove),
+	.remove_new	= __exit_p(smsc47m1_remove),
 };
 
 static int __init smsc47m1_device_add(unsigned short address,
 				      const struct smsc47m1_sio_data *sio_data)
 {
-	struct resource res = {
+	const struct resource res = {
 		.start	= address,
 		.end	= address + SMSC_EXTENT - 1,
 		.name	= DRVNAME,
 		.flags	= IORESOURCE_IO,
 	};
+	const struct platform_device_info pdevinfo = {
+		.name = DRVNAME,
+		.id = address,
+		.res = &res,
+		.num_res = 1,
+		.data = sio_data,
+		.size_data = sizeof(struct smsc47m1_sio_data),
+	};
 	int err;
 
 	err = smsc47m1_handle_resources(address, sio_data->type, CHECK, NULL);
 	if (err)
-		goto exit;
+		return err;
 
-	pdev = platform_device_alloc(DRVNAME, address);
-	if (!pdev) {
-		err = -ENOMEM;
+	smsc47m1_pdev = platform_device_register_full(&pdevinfo);
+	if (IS_ERR(smsc47m1_pdev)) {
 		pr_err("Device allocation failed\n");
-		goto exit;
-	}
-
-	err = platform_device_add_resources(pdev, &res, 1);
-	if (err) {
-		pr_err("Device resource addition failed (%d)\n", err);
-		goto exit_device_put;
-	}
-
-	err = platform_device_add_data(pdev, sio_data,
-				       sizeof(struct smsc47m1_sio_data));
-	if (err) {
-		pr_err("Platform data allocation failed\n");
-		goto exit_device_put;
-	}
-
-	err = platform_device_add(pdev);
-	if (err) {
-		pr_err("Device addition failed (%d)\n", err);
-		goto exit_device_put;
+		return PTR_ERR(smsc47m1_pdev);
 	}
 
 	return 0;
-
-exit_device_put:
-	platform_device_put(pdev);
-exit:
-	return err;
 }
 
 static int __init sm_smsc47m1_init(void)
@@ -928,7 +904,7 @@ static int __init sm_smsc47m1_init(void)
 		return err;
 	address = err;
 
-	/* Sets global pdev as a side effect */
+	/* Sets global smsc47m1_pdev as a side effect */
 	err = smsc47m1_device_add(address, &sio_data);
 	if (err)
 		return err;
@@ -940,7 +916,7 @@ static int __init sm_smsc47m1_init(void)
 	return 0;
 
 exit_device:
-	platform_device_unregister(pdev);
+	platform_device_unregister(smsc47m1_pdev);
 	smsc47m1_restore(&sio_data);
 	return err;
 }
@@ -948,8 +924,8 @@ exit_device:
 static void __exit sm_smsc47m1_exit(void)
 {
 	platform_driver_unregister(&smsc47m1_driver);
-	smsc47m1_restore(dev_get_platdata(&pdev->dev));
-	platform_device_unregister(pdev);
+	smsc47m1_restore(dev_get_platdata(&smsc47m1_pdev->dev));
+	platform_device_unregister(smsc47m1_pdev);
 }
 
 MODULE_AUTHOR("Mark D. Studebaker <mdsxyz123@yahoo.com>");

@@ -60,22 +60,22 @@ static void wdg_timeout_handler (struct timer_list *t)
 	struct _adapter *adapter =
 		from_timer(adapter, t, mlmepriv.wdg_timer);
 
-	_r8712_wdg_timeout_handler(adapter);
+	r8712_wdg_wk_cmd(adapter);
 
 	mod_timer(&adapter->mlmepriv.wdg_timer,
 		  jiffies + msecs_to_jiffies(2000));
 }
 
-void r8712_init_mlme_timer(struct _adapter *padapter)
+void r8712_init_mlme_timer(struct _adapter *adapter)
 {
-	struct	mlme_priv *pmlmepriv = &padapter->mlmepriv;
+	struct	mlme_priv *mlmepriv = &adapter->mlmepriv;
 
-	timer_setup(&pmlmepriv->assoc_timer, join_timeout_handler, 0);
-	timer_setup(&pmlmepriv->sitesurveyctrl.sitesurvey_ctrl_timer,
+	timer_setup(&mlmepriv->assoc_timer, join_timeout_handler, 0);
+	timer_setup(&mlmepriv->sitesurveyctrl.sitesurvey_ctrl_timer,
 		    sitesurvey_ctrl_handler, 0);
-	timer_setup(&pmlmepriv->scan_to_timer, _scan_timeout_handler, 0);
-	timer_setup(&pmlmepriv->dhcp_timer, dhcp_timeout_handler, 0);
-	timer_setup(&pmlmepriv->wdg_timer, wdg_timeout_handler, 0);
+	timer_setup(&mlmepriv->scan_to_timer, _scan_timeout_handler, 0);
+	timer_setup(&mlmepriv->dhcp_timer, dhcp_timeout_handler, 0);
+	timer_setup(&mlmepriv->wdg_timer, wdg_timeout_handler, 0);
 }
 
 void r8712_os_indicate_connect(struct _adapter *adapter)
@@ -84,11 +84,11 @@ void r8712_os_indicate_connect(struct _adapter *adapter)
 	netif_carrier_on(adapter->pnetdev);
 }
 
-static struct RT_PMKID_LIST   backupPMKIDList[NUM_PMKID_CACHE];
+static struct RT_PMKID_LIST backup_PMKID_list[NUM_PMKID_CACHE];
 void r8712_os_indicate_disconnect(struct _adapter *adapter)
 {
-	u8 backupPMKIDIndex = 0;
-	u8 backupTKIPCountermeasure = 0x00;
+	u8 backup_PMKID_index = 0;
+	u8 backup_TKIP_countermeasure = 0x00;
 
 	r8712_indicate_wx_disassoc_event(adapter);
 	netif_carrier_off(adapter->pnetdev);
@@ -99,11 +99,11 @@ void r8712_os_indicate_disconnect(struct _adapter *adapter)
 		 * disconnect with AP for 60 seconds.
 		 */
 
-		memcpy(&backupPMKIDList[0],
+		memcpy(&backup_PMKID_list[0],
 		       &adapter->securitypriv.PMKIDList[0],
 		       sizeof(struct RT_PMKID_LIST) * NUM_PMKID_CACHE);
-		backupPMKIDIndex = adapter->securitypriv.PMKIDIndex;
-		backupTKIPCountermeasure =
+		backup_PMKID_index = adapter->securitypriv.PMKIDIndex;
+		backup_TKIP_countermeasure =
 			adapter->securitypriv.btkip_countermeasure;
 		memset((unsigned char *)&adapter->securitypriv, 0,
 		       sizeof(struct security_priv));
@@ -113,22 +113,22 @@ void r8712_os_indicate_disconnect(struct _adapter *adapter)
 		 * for the following connection.
 		 */
 		memcpy(&adapter->securitypriv.PMKIDList[0],
-		       &backupPMKIDList[0],
+		       &backup_PMKID_list[0],
 		       sizeof(struct RT_PMKID_LIST) * NUM_PMKID_CACHE);
-		adapter->securitypriv.PMKIDIndex = backupPMKIDIndex;
+		adapter->securitypriv.PMKIDIndex = backup_PMKID_index;
 		adapter->securitypriv.btkip_countermeasure =
-					 backupTKIPCountermeasure;
+					 backup_TKIP_countermeasure;
 	} else { /*reset values in securitypriv*/
-		struct security_priv *psec_priv = &adapter->securitypriv;
+		struct security_priv *sec_priv = &adapter->securitypriv;
 
-		psec_priv->AuthAlgrthm = 0; /*open system*/
-		psec_priv->PrivacyAlgrthm = _NO_PRIVACY_;
-		psec_priv->PrivacyKeyIndex = 0;
-		psec_priv->XGrpPrivacy = _NO_PRIVACY_;
-		psec_priv->XGrpKeyid = 1;
-		psec_priv->ndisauthtype = Ndis802_11AuthModeOpen;
-		psec_priv->ndisencryptstatus = Ndis802_11WEPDisabled;
-		psec_priv->wps_phase = false;
+		sec_priv->AuthAlgrthm = 0; /*open system*/
+		sec_priv->PrivacyAlgrthm = _NO_PRIVACY_;
+		sec_priv->PrivacyKeyIndex = 0;
+		sec_priv->XGrpPrivacy = _NO_PRIVACY_;
+		sec_priv->XGrpKeyid = 1;
+		sec_priv->ndisauthtype = Ndis802_11AuthModeOpen;
+		sec_priv->ndisencryptstatus = Ndis802_11WEPDisabled;
+		sec_priv->wps_phase = false;
 	}
 }
 

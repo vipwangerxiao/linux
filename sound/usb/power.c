@@ -31,6 +31,8 @@ snd_usb_find_power_domain(struct usb_host_interface *ctrl_iface,
 		struct uac3_power_domain_descriptor *pd_desc = p;
 		int i;
 
+		if (!snd_usb_validate_audio_desc(p, UAC_VERSION_3))
+			continue;
 		for (i = 0; i < pd_desc->bNrEntities; i++) {
 			if (pd_desc->baEntityID[i] == id) {
 				pd->pd_id = pd_desc->bPowerDomainID;
@@ -38,6 +40,7 @@ snd_usb_find_power_domain(struct usb_host_interface *ctrl_iface,
 					le16_to_cpu(pd_desc->waRecoveryTime1);
 				pd->pd_d2d0_rec =
 					le16_to_cpu(pd_desc->waRecoveryTime2);
+				pd->ctrl_iface = ctrl_iface;
 				return pd;
 			}
 		}
@@ -55,7 +58,7 @@ int snd_usb_power_domain_set(struct snd_usb_audio *chip,
 	unsigned char current_state;
 	int err, idx;
 
-	idx = snd_usb_ctrl_intf(chip) | (pd->pd_id << 8);
+	idx = snd_usb_ctrl_intf(pd->ctrl_iface) | (pd->pd_id << 8);
 
 	err = snd_usb_ctl_msg(chip->dev, usb_rcvctrlpipe(chip->dev, 0),
 			      UAC2_CS_CUR,

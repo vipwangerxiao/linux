@@ -61,18 +61,12 @@ static int stpmic1_onkey_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	onkey->irq_falling = platform_get_irq_byname(pdev, "onkey-falling");
-	if (onkey->irq_falling < 0) {
-		dev_err(dev, "failed: request IRQ onkey-falling %d\n",
-			onkey->irq_falling);
+	if (onkey->irq_falling < 0)
 		return onkey->irq_falling;
-	}
 
 	onkey->irq_rising = platform_get_irq_byname(pdev, "onkey-rising");
-	if (onkey->irq_rising < 0) {
-		dev_err(dev, "failed: request IRQ onkey-rising %d\n",
-			onkey->irq_rising);
+	if (onkey->irq_rising < 0)
 		return onkey->irq_rising;
-	}
 
 	if (!device_property_read_u32(dev, "power-off-time-sec", &val)) {
 		if (val > 0 && val <= 16) {
@@ -148,7 +142,7 @@ static int stpmic1_onkey_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int __maybe_unused stpmic1_onkey_suspend(struct device *dev)
+static int stpmic1_onkey_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct stpmic1_onkey *onkey = platform_get_drvdata(pdev);
@@ -160,7 +154,7 @@ static int __maybe_unused stpmic1_onkey_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused stpmic1_onkey_resume(struct device *dev)
+static int stpmic1_onkey_resume(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct stpmic1_onkey *onkey = platform_get_drvdata(pdev);
@@ -172,9 +166,9 @@ static int __maybe_unused stpmic1_onkey_resume(struct device *dev)
 	return 0;
 }
 
-static SIMPLE_DEV_PM_OPS(stpmic1_onkey_pm,
-			 stpmic1_onkey_suspend,
-			 stpmic1_onkey_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(stpmic1_onkey_pm,
+				stpmic1_onkey_suspend,
+				stpmic1_onkey_resume);
 
 static const struct of_device_id of_stpmic1_onkey_match[] = {
 	{ .compatible = "st,stpmic1-onkey" },
@@ -188,7 +182,7 @@ static struct platform_driver stpmic1_onkey_driver = {
 	.driver	= {
 		.name	= "stpmic1_onkey",
 		.of_match_table = of_match_ptr(of_stpmic1_onkey_match),
-		.pm	= &stpmic1_onkey_pm,
+		.pm	= pm_sleep_ptr(&stpmic1_onkey_pm),
 	},
 };
 module_platform_driver(stpmic1_onkey_driver);

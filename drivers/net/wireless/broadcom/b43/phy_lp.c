@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
 
   Broadcom B43 wireless driver
@@ -6,20 +7,6 @@
   Copyright (c) 2008-2009 Michael Buesch <m@bues.ch>
   Copyright (c) 2009 Gábor Stefanik <netrolller.3d@gmail.com>
 
-  This program is free software; you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation; either version 2 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program; see the file COPYING.  If not, write to
-  the Free Software Foundation, Inc., 51 Franklin Steet, Fifth Floor,
-  Boston, MA 02110-1301, USA.
 
 */
 
@@ -83,7 +70,7 @@ static void b43_lpphy_op_free(struct b43_wldev *dev)
 	dev->phy.lp = NULL;
 }
 
-/* http://bcm-v4.sipsolutions.net/802.11/PHY/LP/ReadBandSrom */
+/* https://bcm-v4.sipsolutions.net/802.11/PHY/LP/ReadBandSrom */
 static void lpphy_read_band_sprom(struct b43_wldev *dev)
 {
 	struct ssb_sprom *sprom = dev->dev->bus_sprom;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2010 Marvell International Ltd.
  *		Zhangfei Gao <zhangfei.gao@marvell.com>
@@ -5,16 +6,6 @@
  *		Mingwei Wang <mwwang@marvell.com>
  *		Philip Rakity <prakity@marvell.com>
  *		Mark Brown <markb@marvell.com>
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 #include <linux/err.h>
 #include <linux/init.h>
@@ -133,10 +124,8 @@ static int armada_38x_quirks(struct platform_device *pdev,
 	struct resource *res;
 
 	host->quirks &= ~SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN;
-	host->quirks |= SDHCI_QUIRK_MISSING_CAPS;
 
-	host->caps = sdhci_readl(host, SDHCI_CAPABILITIES);
-	host->caps1 = sdhci_readl(host, SDHCI_CAPABILITIES_1);
+	sdhci_read_caps(host);
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
 					   "conf-sdio3");
@@ -481,7 +470,7 @@ err_clk_get:
 	return ret;
 }
 
-static int sdhci_pxav3_remove(struct platform_device *pdev)
+static void sdhci_pxav3_remove(struct platform_device *pdev)
 {
 	struct sdhci_host *host = platform_get_drvdata(pdev);
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
@@ -497,8 +486,6 @@ static int sdhci_pxav3_remove(struct platform_device *pdev)
 	clk_disable_unprepare(pxa->clk_core);
 
 	sdhci_pltfm_free(pdev);
-
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -563,7 +550,7 @@ static int sdhci_pxav3_runtime_resume(struct device *dev)
 	if (!IS_ERR(pxa->clk_core))
 		clk_prepare_enable(pxa->clk_core);
 
-	return sdhci_runtime_resume_host(host);
+	return sdhci_runtime_resume_host(host, 0);
 }
 #endif
 
@@ -576,11 +563,12 @@ static const struct dev_pm_ops sdhci_pxav3_pmops = {
 static struct platform_driver sdhci_pxav3_driver = {
 	.driver		= {
 		.name	= "sdhci-pxav3",
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table = of_match_ptr(sdhci_pxav3_of_match),
 		.pm	= &sdhci_pxav3_pmops,
 	},
 	.probe		= sdhci_pxav3_probe,
-	.remove		= sdhci_pxav3_remove,
+	.remove_new	= sdhci_pxav3_remove,
 };
 
 module_platform_driver(sdhci_pxav3_driver);

@@ -1,27 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) Nokia Corporation
  *
  * Written by Timo Kokkonen <timo.t.kokkonen at nokia.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/kernel.h>
+#include <linux/mod_devicetable.h>
 #include <linux/watchdog.h>
 #include <linux/platform_device.h>
 #include <linux/mfd/twl.h>
@@ -93,7 +81,6 @@ static int twl4030_wdt_probe(struct platform_device *pdev)
 	return devm_watchdog_register_device(dev, wdt);
 }
 
-#ifdef CONFIG_PM
 static int twl4030_wdt_suspend(struct platform_device *pdev, pm_message_t state)
 {
 	struct watchdog_device *wdt = platform_get_drvdata(pdev);
@@ -111,10 +98,6 @@ static int twl4030_wdt_resume(struct platform_device *pdev)
 
 	return 0;
 }
-#else
-#define twl4030_wdt_suspend        NULL
-#define twl4030_wdt_resume         NULL
-#endif
 
 static const struct of_device_id twl_wdt_of_match[] = {
 	{ .compatible = "ti,twl4030-wdt", },
@@ -124,8 +107,8 @@ MODULE_DEVICE_TABLE(of, twl_wdt_of_match);
 
 static struct platform_driver twl4030_wdt_driver = {
 	.probe		= twl4030_wdt_probe,
-	.suspend	= twl4030_wdt_suspend,
-	.resume		= twl4030_wdt_resume,
+	.suspend	= pm_ptr(twl4030_wdt_suspend),
+	.resume		= pm_ptr(twl4030_wdt_resume),
 	.driver		= {
 		.name		= "twl4030_wdt",
 		.of_match_table	= twl_wdt_of_match,
@@ -135,6 +118,7 @@ static struct platform_driver twl4030_wdt_driver = {
 module_platform_driver(twl4030_wdt_driver);
 
 MODULE_AUTHOR("Nokia Corporation");
+MODULE_DESCRIPTION("TWL4030 Watchdog");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:twl4030_wdt");
 

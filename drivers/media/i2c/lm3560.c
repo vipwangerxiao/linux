@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * drivers/media/i2c/lm3560.c
  * General device driver for TI lm3559, lm3560, FLASH LED Driver
@@ -6,15 +7,6 @@
  *
  * Contact: Daniel Jeong <gshark.jeong@gmail.com>
  *			Ldd-Mlp <ldd-mlp@list.ti.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
  */
 
 #include <linux/delay.h>
@@ -399,8 +391,7 @@ static int lm3560_init_device(struct lm3560_flash *flash)
 	return rval;
 }
 
-static int lm3560_probe(struct i2c_client *client,
-			const struct i2c_device_id *devid)
+static int lm3560_probe(struct i2c_client *client)
 {
 	struct lm3560_flash *flash;
 	struct lm3560_platform_data *pdata = dev_get_platdata(&client->dev);
@@ -451,7 +442,7 @@ static int lm3560_probe(struct i2c_client *client,
 	return 0;
 }
 
-static int lm3560_remove(struct i2c_client *client)
+static void lm3560_remove(struct i2c_client *client)
 {
 	struct lm3560_flash *flash = i2c_get_clientdata(client);
 	unsigned int i;
@@ -461,13 +452,11 @@ static int lm3560_remove(struct i2c_client *client)
 		v4l2_ctrl_handler_free(&flash->ctrls_led[i]);
 		media_entity_cleanup(&flash->subdev_led[i].entity);
 	}
-
-	return 0;
 }
 
 static const struct i2c_device_id lm3560_id_table[] = {
-	{LM3559_NAME, 0},
-	{LM3560_NAME, 0},
+	{ LM3559_NAME },
+	{ LM3560_NAME },
 	{}
 };
 

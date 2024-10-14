@@ -26,13 +26,6 @@
 #define	RTL871X_VENQT_READ	0xc0
 #define	RTL871X_VENQT_WRITE	0x40
 
-struct zero_bulkout_context {
-	void *pbuf;
-	void *purb;
-	void *pirp;
-	void *padapter;
-};
-
 uint r8712_usb_init_intf_priv(struct intf_priv *pintfpriv)
 {
 	pintfpriv->piorw_urb = usb_alloc_urb(0, GFP_ATOMIC);
@@ -225,10 +218,10 @@ static void r8712_usb_read_port_complete(struct urb *purb)
 				padapter->driver_stopped = true;
 				break;
 			}
-			/* Fall through. */
+			fallthrough;
 		case -EPROTO:
 			r8712_read_port(padapter, precvpriv->ff_hwaddr, 0,
-				  (unsigned char *)precvbuf);
+					(unsigned char *)precvbuf);
 			break;
 		case -EINPROGRESS:
 			netdev_err(padapter->pnetdev, "ERROR: URB IS IN PROGRESS!\n");
@@ -308,10 +301,11 @@ void r8712_usb_read_port_cancel(struct _adapter *padapter)
 	}
 }
 
-void r8712_xmit_bh(void *priv)
+void r8712_xmit_bh(struct tasklet_struct *t)
 {
 	int ret = false;
-	struct _adapter *padapter = priv;
+	struct _adapter *padapter = from_tasklet(padapter, t,
+						 xmitpriv.xmit_tasklet);
 	struct xmit_priv *pxmitpriv = &padapter->xmitpriv;
 
 	if (padapter->driver_stopped ||
@@ -493,15 +487,22 @@ int r8712_usbctrl_vendorreq(struct intf_priv *pintfpriv, u8 request, u16 value,
 		memcpy(pIo_buf, pdata, len);
 	}
 	status = usb_control_msg(udev, pipe, request, reqtype, value, index,
-				 pIo_buf, len, HZ / 2);
-	if (status > 0) {  /* Success this control transfer. */
-		if (requesttype == 0x01) {
-			/* For Control read transfer, we have to copy the read
-			 * data from pIo_buf to pdata.
-			 */
-			memcpy(pdata, pIo_buf,  status);
-		}
+				 pIo_buf, len, 500);
+	if (status < 0)
+		goto free;
+	if (status != len) {
+		status = -EREMOTEIO;
+		goto free;
 	}
+	/* Success this control transfer. */
+	if (requesttype == 0x01) {
+		/* For Control read transfer, we have to copy the read
+		 * data from pIo_buf to pdata.
+		 */
+		memcpy(pdata, pIo_buf, status);
+	}
+
+free:
 	kfree(palloc_buf);
 	return status;
 }

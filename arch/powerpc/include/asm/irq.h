@@ -1,15 +1,11 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifdef __KERNEL__
 #ifndef _ASM_POWERPC_IRQ_H
 #define _ASM_POWERPC_IRQ_H
 
 /*
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
-#include <linux/irqdomain.h>
 #include <linux/threads.h>
 #include <linux/list.h>
 #include <linux/radix-tree.h>
@@ -20,14 +16,11 @@
 
 extern atomic_t ppc_n_lost_interrupts;
 
-/* This number is used when no interrupt has been assigned */
-#define NO_IRQ			(0)
-
 /* Total number of virq in the platform */
 #define NR_IRQS		CONFIG_NR_IRQS
 
-/* Same thing, used by the generic IRQ code */
-#define NR_IRQS_LEGACY		NUM_ISA_INTERRUPTS
+/* Number of irqs reserved for a legacy isa controller */
+#define NR_IRQS_LEGACY		16
 
 extern irq_hw_number_t virq_to_hw(unsigned int virq);
 
@@ -38,12 +31,9 @@ static __inline__ int irq_canonicalize(int irq)
 
 extern int distribute_irqs;
 
-struct irqaction;
 struct pt_regs;
 
-#define __ARCH_HAS_DO_SOFTIRQ
-
-#if defined(CONFIG_BOOKE) || defined(CONFIG_40x)
+#ifdef CONFIG_BOOKE
 /*
  * Per-cpu stacks for handling critical, debug and machine check
  * level interrupts.
@@ -59,13 +49,15 @@ extern void *mcheckirq_ctx[NR_CPUS];
 extern void *hardirq_ctx[NR_CPUS];
 extern void *softirq_ctx[NR_CPUS];
 
-void call_do_softirq(void *sp);
-void call_do_irq(struct pt_regs *regs, void *sp);
-extern void do_IRQ(struct pt_regs *regs);
-extern void __init init_IRQ(void);
-extern void __do_irq(struct pt_regs *regs);
+void __do_IRQ(struct pt_regs *regs);
 
 int irq_choose_cpu(const struct cpumask *mask);
+
+#if defined(CONFIG_PPC_BOOK3S_64) && defined(CONFIG_NMI_IPI)
+extern void arch_trigger_cpumask_backtrace(const cpumask_t *mask,
+					   int exclude_cpu);
+#define arch_trigger_cpumask_backtrace arch_trigger_cpumask_backtrace
+#endif
 
 #endif /* _ASM_IRQ_H */
 #endif /* __KERNEL__ */

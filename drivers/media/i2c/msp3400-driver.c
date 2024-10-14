@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Programming the mspx4xx sound processor family
  *
@@ -29,16 +30,6 @@
  *
  * 980623  Thomas Sailer (sailer@ife.ee.ethz.ch)
  *         using soundcore instead of OSS
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 
@@ -318,23 +309,15 @@ static void msp_wake_thread(struct i2c_client *client)
 	wake_up_interruptible(&state->wq);
 }
 
-int msp_sleep(struct msp_state *state, int timeout)
+int msp_sleep(struct msp_state *state, int msec)
 {
-	DECLARE_WAITQUEUE(wait, current);
+	long timeout;
 
-	add_wait_queue(&state->wq, &wait);
-	if (!kthread_should_stop()) {
-		if (timeout < 0) {
-			set_current_state(TASK_INTERRUPTIBLE);
-			schedule();
-		} else {
-			schedule_timeout_interruptible
-						(msecs_to_jiffies(timeout));
-		}
-	}
+	timeout = msec < 0 ? MAX_SCHEDULE_TIMEOUT : msecs_to_jiffies(msec);
 
-	remove_wait_queue(&state->wq, &wait);
-	try_to_freeze();
+	wait_event_freezable_timeout(state->wq, kthread_should_stop() ||
+				     state->restart, timeout);
+
 	return state->restart;
 }
 
@@ -570,7 +553,7 @@ static int msp_log_status(struct v4l2_subdev *sd)
 	struct msp_state *state = to_state(sd);
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	const char *p;
-	char prefix[V4L2_SUBDEV_NAME_SIZE + 20];
+	char prefix[sizeof(sd->name) + 20];
 
 	if (state->opmode == OPMODE_AUTOSELECT)
 		msp_detect_stereo(client);
@@ -672,8 +655,9 @@ static const char * const opmode_str[] = {
 	[OPMODE_AUTOSELECT] = "autodetect and autoselect",
 };
 
-static int msp_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int msp_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct msp_state *state;
 	struct v4l2_subdev *sd;
 	struct v4l2_ctrl_handler *hdl;
@@ -868,7 +852,7 @@ static int msp_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	return 0;
 }
 
-static int msp_remove(struct i2c_client *client)
+static void msp_remove(struct i2c_client *client)
 {
 	struct msp_state *state = to_state(i2c_get_clientdata(client));
 
@@ -881,7 +865,6 @@ static int msp_remove(struct i2c_client *client)
 	msp_reset(client);
 
 	v4l2_ctrl_handler_free(&state->hdl);
-	return 0;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -891,7 +874,7 @@ static const struct dev_pm_ops msp3400_pm_ops = {
 };
 
 static const struct i2c_device_id msp_id[] = {
-	{ "msp3400", 0 },
+	{ "msp3400" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, msp_id);

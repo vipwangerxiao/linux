@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * omap-hdmi-audio.c -- OMAP4+ DSS HDMI audio support library
  *
- * Copyright (C) 2014 Texas Instruments Incorporated - http://www.ti.com
+ * Copyright (C) 2014 Texas Instruments Incorporated - https://www.ti.com
  *
  * Author: Jyri Sarha <jsarha@ti.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
  */
 
 #include <linux/kernel.h>
@@ -49,7 +40,7 @@ struct hdmi_audio_data {
 static
 struct hdmi_audio_data *card_drvdata_substream(struct snd_pcm_substream *ss)
 {
-	struct snd_soc_pcm_runtime *rtd = ss->private_data;
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(ss);
 
 	return snd_soc_card_get_drvdata(rtd->card);
 }
@@ -284,6 +275,7 @@ static const struct snd_soc_dai_ops hdmi_dai_ops = {
 
 static const struct snd_soc_component_driver omap_hdmi_component = {
 	.name = "omapdss_hdmi",
+	.legacy_dai_naming = 1,
 };
 
 static struct snd_soc_dai_driver omap5_hdmi_dai = {
@@ -321,6 +313,7 @@ static int omap_hdmi_audio_probe(struct platform_device *pdev)
 	struct hdmi_audio_data *ad;
 	struct snd_soc_dai_driver *dai_drv;
 	struct snd_soc_card *card;
+	struct snd_soc_dai_link_component *compnent;
 	int ret;
 
 	if (!ha) {
@@ -361,26 +354,28 @@ static int omap_hdmi_audio_probe(struct platform_device *pdev)
 	if (!card)
 		return -ENOMEM;
 
-	card->name = devm_kasprintf(dev, GFP_KERNEL,
-				    "HDMI %s", dev_name(ad->dssdev));
-	if (!card->name)
-		return -ENOMEM;
-
+	card->name = "HDMI";
 	card->owner = THIS_MODULE;
 	card->dai_link =
 		devm_kzalloc(dev, sizeof(*(card->dai_link)), GFP_KERNEL);
 	if (!card->dai_link)
 		return -ENOMEM;
+
+	compnent = devm_kzalloc(dev, sizeof(*compnent), GFP_KERNEL);
+	if (!compnent)
+		return -ENOMEM;
+	card->dai_link->cpus		= compnent;
+	card->dai_link->num_cpus	= 1;
+	card->dai_link->codecs		= &snd_soc_dummy_dlc;
+	card->dai_link->num_codecs	= 1;
+
 	card->dai_link->name = card->name;
 	card->dai_link->stream_name = card->name;
-	card->dai_link->cpu_dai_name = dev_name(ad->dssdev);
-	card->dai_link->platform_name = dev_name(ad->dssdev);
-	card->dai_link->codec_name = "snd-soc-dummy";
-	card->dai_link->codec_dai_name = "snd-soc-dummy-dai";
+	card->dai_link->cpus->dai_name = dev_name(ad->dssdev);
 	card->num_links = 1;
 	card->dev = dev;
 
-	ret = snd_soc_register_card(card);
+	ret = devm_snd_soc_register_card(dev, card);
 	if (ret) {
 		dev_err(dev, "snd_soc_register_card failed (%d)\n", ret);
 		return ret;
@@ -394,20 +389,11 @@ static int omap_hdmi_audio_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int omap_hdmi_audio_remove(struct platform_device *pdev)
-{
-	struct hdmi_audio_data *ad = platform_get_drvdata(pdev);
-
-	snd_soc_unregister_card(ad->card);
-	return 0;
-}
-
 static struct platform_driver hdmi_audio_driver = {
 	.driver = {
 		.name = DRV_NAME,
 	},
 	.probe = omap_hdmi_audio_probe,
-	.remove = omap_hdmi_audio_remove,
 };
 
 module_platform_driver(hdmi_audio_driver);

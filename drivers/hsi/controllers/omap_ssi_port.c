@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* OMAP SSI port driver.
  *
  * Copyright (C) 2010 Nokia Corporation. All rights reserved.
  * Copyright (C) 2014 Sebastian Reichel <sre@kernel.org>
  *
  * Contact: Carlos Chinea <carlos.chinea@nokia.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
  */
 
 #include <linux/mod_devicetable.h>
@@ -164,23 +151,17 @@ static int ssi_div_set(void *data, u64 val)
 
 DEFINE_DEBUGFS_ATTRIBUTE(ssi_sst_div_fops, ssi_div_get, ssi_div_set, "%llu\n");
 
-static int ssi_debug_add_port(struct omap_ssi_port *omap_port,
+static void ssi_debug_add_port(struct omap_ssi_port *omap_port,
 				     struct dentry *dir)
 {
 	struct hsi_port *port = to_hsi_port(omap_port->dev);
 
 	dir = debugfs_create_dir(dev_name(omap_port->dev), dir);
-	if (!dir)
-		return -ENOMEM;
 	omap_port->dir = dir;
 	debugfs_create_file("regs", S_IRUGO, dir, port, &ssi_port_regs_fops);
 	dir = debugfs_create_dir("sst", dir);
-	if (!dir)
-		return -ENOMEM;
 	debugfs_create_file_unsafe("divisor", 0644, dir, port,
 				   &ssi_sst_div_fops);
-
-	return 0;
 }
 #endif
 
@@ -243,10 +224,10 @@ static int ssi_start_dma(struct hsi_msg *msg, int lch)
 	if (msg->ttype == HSI_MSG_READ) {
 		err = dma_map_sg(&ssi->device, msg->sgt.sgl, msg->sgt.nents,
 							DMA_FROM_DEVICE);
-		if (err < 0) {
+		if (!err) {
 			dev_dbg(&ssi->device, "DMA map SG failed !\n");
 			pm_runtime_put_autosuspend(omap_port->pdev);
-			return err;
+			return -EIO;
 		}
 		csdp = SSI_DST_BURST_4x32_BIT | SSI_DST_MEMORY_PORT |
 			SSI_SRC_SINGLE_ACCESS0 | SSI_SRC_PERIPHERAL_PORT |
@@ -260,10 +241,10 @@ static int ssi_start_dma(struct hsi_msg *msg, int lch)
 	} else {
 		err = dma_map_sg(&ssi->device, msg->sgt.sgl, msg->sgt.nents,
 							DMA_TO_DEVICE);
-		if (err < 0) {
+		if (!err) {
 			dev_dbg(&ssi->device, "DMA map SG failed !\n");
 			pm_runtime_put_autosuspend(omap_port->pdev);
-			return err;
+			return -EIO;
 		}
 		csdp = SSI_SRC_BURST_4x32_BIT | SSI_SRC_MEMORY_PORT |
 			SSI_DST_SINGLE_ACCESS0 | SSI_DST_PERIPHERAL_PORT |
@@ -1051,10 +1032,8 @@ static int ssi_port_irq(struct hsi_port *port, struct platform_device *pd)
 	int err;
 
 	err = platform_get_irq(pd, 0);
-	if (err < 0) {
-		dev_err(&port->device, "Port IRQ resource missing\n");
+	if (err < 0)
 		return err;
-	}
 	omap_port->irq = err;
 	err = devm_request_threaded_irq(&port->device, omap_port->irq, NULL,
 				ssi_pio_thread, IRQF_ONESHOT, "SSI PORT", port);
@@ -1232,11 +1211,7 @@ static int ssi_port_probe(struct platform_device *pd)
 	pm_runtime_enable(omap_port->pdev);
 
 #ifdef CONFIG_DEBUG_FS
-	err = ssi_debug_add_port(omap_port, omap_ssi->dir);
-	if (err < 0) {
-		pm_runtime_disable(omap_port->pdev);
-		goto error;
-	}
+	ssi_debug_add_port(omap_port, omap_ssi->dir);
 #endif
 
 	hsi_add_clients_from_dt(port, np);
@@ -1249,7 +1224,7 @@ error:
 	return err;
 }
 
-static int ssi_port_remove(struct platform_device *pd)
+static void ssi_port_remove(struct platform_device *pd)
 {
 	struct hsi_port *port = platform_get_drvdata(pd);
 	struct omap_ssi_port *omap_port = hsi_port_drvdata(port);
@@ -1276,8 +1251,6 @@ static int ssi_port_remove(struct platform_device *pd)
 
 	pm_runtime_dont_use_autosuspend(&pd->dev);
 	pm_runtime_disable(&pd->dev);
-
-	return 0;
 }
 
 static int ssi_restore_divisor(struct omap_ssi_port *omap_port)
@@ -1412,7 +1385,7 @@ MODULE_DEVICE_TABLE(of, omap_ssi_port_of_match);
 
 struct platform_driver ssi_port_pdriver = {
 	.probe = ssi_port_probe,
-	.remove	= ssi_port_remove,
+	.remove_new = ssi_port_remove,
 	.driver	= {
 		.name	= "omap_ssi_port",
 		.of_match_table = omap_ssi_port_of_match,

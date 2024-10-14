@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Modifications by Matt Porter (mporter@mvista.com) to support
  * PPC44x Book E processors.
@@ -15,12 +16,6 @@
  *
  *  Derived from "arch/i386/mm/init.c"
  *    Copyright (C) 1991, 1992, 1993, 1994  Linus Torvalds
- *
- *  This program is free software; you can redistribute it and/or
- *  modify it under the terms of the GNU General Public License
- *  as published by the Free Software Foundation; either version
- *  2 of the License, or (at your option) any later version.
- *
  */
 
 #include <linux/init.h>
@@ -30,6 +25,7 @@
 #include <asm/page.h>
 #include <asm/cacheflush.h>
 #include <asm/code-patching.h>
+#include <asm/smp.h>
 
 #include <mm/mmu_decl.h>
 
@@ -42,7 +38,7 @@ int icache_44x_need_flush;
 
 unsigned long tlb_47x_boltmap[1024/8];
 
-static void ppc44x_update_tlb_hwater(void)
+static void __init ppc44x_update_tlb_hwater(void)
 {
 	/* The TLB miss handlers hard codes the watermark in a cmpli
 	 * instruction to improve performances rather than loading it
@@ -126,7 +122,7 @@ static void __init ppc47x_update_boltmap(void)
 /*
  * "Pins" a 256MB TLB entry in AS0 for kernel lowmem for 47x type MMU
  */
-static void ppc47x_pin_tlb(unsigned int virt, unsigned int phys)
+static void __init ppc47x_pin_tlb(unsigned int virt, unsigned int phys)
 {
 	unsigned int rA;
 	int bolted;

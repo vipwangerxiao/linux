@@ -1,22 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *   ALSA sequencer System services Client
  *   Copyright (c) 1998-1999 by Frank van de Pol <fvdpol@coil.demon.nl>
- *
- *
- *   This program is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or
- *   (at your option) any later version.
- *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *   GNU General Public License for more details.
- *
- *   You should have received a copy of the GNU General Public License
- *   along with this program; if not, write to the Free Software
- *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
- *
  */
 
 #include <linux/init.h>
@@ -100,6 +85,7 @@ void snd_seq_system_broadcast(int client, int port, int type)
 	ev.type = type;
 	snd_seq_kernel_client_dispatch(sysclient, &ev, 0, 0);
 }
+EXPORT_SYMBOL_GPL(snd_seq_system_broadcast);
 
 /* entry points for broadcasting system events */
 int snd_seq_system_notify(int client, int port, struct snd_seq_event *ev)

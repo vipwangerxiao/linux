@@ -7,7 +7,7 @@
  *         Jason McMullan <jason.mcmullan@netronome.com>
  */
 
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 #include <linux/bitfield.h>
 #include <linux/delay.h>
 #include <linux/firmware.h>
@@ -96,8 +96,11 @@ enum nfp_nsp_cmd {
 	SPCODE_NSP_IDENTIFY	= 13, /* Read NSP version */
 	SPCODE_FW_STORED	= 16, /* If no FW loaded, load flash app FW */
 	SPCODE_HWINFO_LOOKUP	= 17, /* Lookup HWinfo with overwrites etc. */
+	SPCODE_HWINFO_SET	= 18, /* Set HWinfo entry */
+	SPCODE_FW_LOADED	= 19, /* Is application firmware loaded */
 	SPCODE_VERSIONS		= 21, /* Report FW versions */
 	SPCODE_READ_SFF_EEPROM	= 22, /* Read module EEPROM */
+	SPCODE_READ_MEDIA	= 23, /* Get either the supported or advertised media for a port */
 };
 
 struct nfp_nsp_dma_buf {
@@ -143,6 +146,8 @@ struct nfp_nsp {
  * @option:	NFP SP Command Argument
  * @buf:	NFP SP Buffer Address
  * @error_cb:	Callback for interpreting option if error occurred
+ * @error_quiet:Don't print command error/warning. Protocol errors are still
+ *		    logged.
  */
 struct nfp_nsp_command_arg {
 	u16 code;
@@ -151,6 +156,7 @@ struct nfp_nsp_command_arg {
 	u32 option;
 	u64 buf;
 	void (*error_cb)(struct nfp_nsp *state, u32 ret_val);
+	bool error_quiet;
 };
 
 /**
@@ -241,9 +247,14 @@ static int nfp_nsp_check(struct nfp_nsp *state)
 	state->ver.major = FIELD_GET(NSP_STATUS_MAJOR, reg);
 	state->ver.minor = FIELD_GET(NSP_STATUS_MINOR, reg);
 
-	if (state->ver.major != NSP_MAJOR || state->ver.minor < NSP_MINOR) {
+	if (state->ver.major != NSP_MAJOR) {
 		nfp_err(cpp, "Unsupported ABI %hu.%hu\n",
 			state->ver.major, state->ver.minor);
+		return -EINVAL;
+	}
+	if (state->ver.minor < NSP_MINOR) {
+		nfp_err(cpp, "ABI too old to support NIC operation (%u.%hu < %u.%u), please update the management FW on the flash\n",
+			NSP_MAJOR, state->ver.minor, NSP_MAJOR, NSP_MINOR);
 		return -EINVAL;
 	}
 
@@ -267,7 +278,7 @@ struct nfp_nsp *nfp_nsp_open(struct nfp_cpp *cpp)
 
 	res = nfp_resource_acquire(cpp, NFP_RESOURCE_NSP);
 	if (IS_ERR(res))
-		return (void *)res;
+		return ERR_CAST(res);
 
 	state = kzalloc(sizeof(*state), GFP_KERNEL);
 	if (!state) {
@@ -400,8 +411,10 @@ __nfp_nsp_command(struct nfp_nsp *state, const struct nfp_nsp_command_arg *arg)
 
 	err = FIELD_GET(NSP_STATUS_RESULT, reg);
 	if (err) {
-		nfp_warn(cpp, "Result (error) code set: %d (%d) command: %d\n",
-			 -err, (int)ret_val, arg->code);
+		if (!arg->error_quiet)
+			nfp_warn(cpp, "Result (error) code set: %d (%d) command: %d\n",
+				 -err, (int)ret_val, arg->code);
+
 		if (arg->error_cb)
 			arg->error_cb(state, ret_val);
 		else
@@ -501,7 +514,7 @@ nfp_nsp_command_buf_dma_sg(struct nfp_nsp *nsp,
 	dma_size = BIT_ULL(dma_order);
 	nseg = DIV_ROUND_UP(max_size, chunk_size);
 
-	chunks = kzalloc(array_size(sizeof(*chunks), nseg), GFP_KERNEL);
+	chunks = kcalloc(nseg, sizeof(*chunks), GFP_KERNEL);
 	if (!chunks)
 		return -ENOMEM;
 
@@ -886,12 +899,14 @@ int nfp_nsp_load_stored_fw(struct nfp_nsp *state)
 }
 
 static int
-__nfp_nsp_hwinfo_lookup(struct nfp_nsp *state, void *buf, unsigned int size)
+__nfp_nsp_hwinfo_lookup(struct nfp_nsp *state, void *buf, unsigned int size,
+			bool optional)
 {
 	struct nfp_nsp_command_buf_arg hwinfo_lookup = {
 		{
 			.code		= SPCODE_HWINFO_LOOKUP,
 			.option		= size,
+			.error_quiet	= optional,
 		},
 		.in_buf		= buf,
 		.in_size	= size,
@@ -908,7 +923,7 @@ int nfp_nsp_hwinfo_lookup(struct nfp_nsp *state, void *buf, unsigned int size)
 
 	size = min_t(u32, size, NFP_HWINFO_LOOKUP_SIZE);
 
-	err = __nfp_nsp_hwinfo_lookup(state, buf, size);
+	err = __nfp_nsp_hwinfo_lookup(state, buf, size, false);
 	if (err)
 		return err;
 
@@ -918,6 +933,66 @@ int nfp_nsp_hwinfo_lookup(struct nfp_nsp *state, void *buf, unsigned int size)
 	}
 
 	return 0;
+}
+
+int nfp_nsp_hwinfo_lookup_optional(struct nfp_nsp *state, void *buf,
+				   unsigned int size, const char *default_val)
+{
+	int err;
+
+	/* Ensure that the default value is usable irrespective of whether
+	 * it is actually going to be used.
+	 */
+	if (strnlen(default_val, size) == size)
+		return -EINVAL;
+
+	if (!nfp_nsp_has_hwinfo_lookup(state)) {
+		strcpy(buf, default_val);
+		return 0;
+	}
+
+	size = min_t(u32, size, NFP_HWINFO_LOOKUP_SIZE);
+
+	err = __nfp_nsp_hwinfo_lookup(state, buf, size, true);
+	if (err) {
+		if (err == -ENOENT) {
+			strcpy(buf, default_val);
+			return 0;
+		}
+
+		nfp_err(state->cpp, "NSP HWinfo lookup failed: %d\n", err);
+		return err;
+	}
+
+	if (strnlen(buf, size) == size) {
+		nfp_err(state->cpp, "NSP HWinfo value not NULL-terminated\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+int nfp_nsp_hwinfo_set(struct nfp_nsp *state, void *buf, unsigned int size)
+{
+	struct nfp_nsp_command_buf_arg hwinfo_set = {
+		{
+			.code		= SPCODE_HWINFO_SET,
+			.option		= size,
+		},
+		.in_buf		= buf,
+		.in_size	= size,
+	};
+
+	return nfp_nsp_command_buf(state, &hwinfo_set);
+}
+
+int nfp_nsp_fw_loaded(struct nfp_nsp *state)
+{
+	const struct nfp_nsp_command_arg arg = {
+		.code		= SPCODE_FW_LOADED,
+	};
+
+	return __nfp_nsp_command(state, &arg);
 }
 
 int nfp_nsp_versions(struct nfp_nsp *state, void *buf, unsigned int size)
@@ -996,7 +1071,7 @@ int nfp_nsp_read_module_eeprom(struct nfp_nsp *state, int eth_index,
 		__le16 offset;
 		__le16 readlen;
 		u8 eth_index;
-		u8 data[0];
+		u8 data[];
 	} __packed *buf;
 	int bufsz, ret;
 
@@ -1026,4 +1101,20 @@ int nfp_nsp_read_module_eeprom(struct nfp_nsp *state, int eth_index,
 	kfree(buf);
 
 	return ret;
+};
+
+int nfp_nsp_read_media(struct nfp_nsp *state, void *buf, unsigned int size)
+{
+	struct nfp_nsp_command_buf_arg media = {
+		{
+			.code		= SPCODE_READ_MEDIA,
+			.option		= size,
+		},
+		.in_buf		= buf,
+		.in_size	= size,
+		.out_buf	= buf,
+		.out_size	= size,
+	};
+
+	return nfp_nsp_command_buf(state, &media);
 }

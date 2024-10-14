@@ -1,48 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
- * Copyright(c) 2015 - 2018 Intel Corporation.
- *
- * This file is provided under a dual BSD/GPLv2 license.  When using or
- * redistributing this file, you may do so under either license.
- *
- * GPL LICENSE SUMMARY
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * BSD LICENSE
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- *  - Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *  - Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *  - Neither the name of Intel Corporation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
+ * Copyright(c) 2015 - 2020 Intel Corporation.
+ * Copyright(c) 2021 Cornelis Networks.
  */
 
 /*
@@ -66,10 +25,7 @@
 #include "affinity.h"
 #include "debugfs.h"
 #include "fault.h"
-
-uint kdeth_qp;
-module_param_named(kdeth_qp, kdeth_qp, uint, S_IRUGO);
-MODULE_PARM_DESC(kdeth_qp, "Set the KDETH queue pair prefix");
+#include "netdev.h"
 
 uint num_vls = HFI1_MAX_VLS_SUPPORTED;
 module_param(num_vls, uint, S_IRUGO);
@@ -128,13 +84,15 @@ struct flag_table {
 
 /*
  * RSM instance allocation
- *   0 - Verbs
- *   1 - User Fecn Handling
- *   2 - Vnic
+ *   0 - User Fecn Handling
+ *   1 - Vnic
+ *   2 - AIP
+ *   3 - Verbs
  */
-#define RSM_INS_VERBS             0
-#define RSM_INS_FECN              1
-#define RSM_INS_VNIC              2
+#define RSM_INS_FECN              0
+#define RSM_INS_VNIC              1
+#define RSM_INS_AIP               2
+#define RSM_INS_VERBS             3
 
 /* Bit offset into the GUID which carries HFI id information */
 #define GUID_HFI_INDEX_SHIFT     39
@@ -174,6 +132,25 @@ struct flag_table {
 
 /* QPN[m+n:1] QW 1, OFFSET 1 */
 #define QPN_SELECT_OFFSET      ((1ull << QW_SHIFT) | (1ull))
+
+/* RSM fields for AIP */
+/* LRH.BTH above is reused for this rule */
+
+/* BTH.DESTQP: QW 1, OFFSET 16 for match */
+#define BTH_DESTQP_QW           1ull
+#define BTH_DESTQP_BIT_OFFSET   16ull
+#define BTH_DESTQP_OFFSET(off) ((BTH_DESTQP_QW << QW_SHIFT) | (off))
+#define BTH_DESTQP_MATCH_OFFSET BTH_DESTQP_OFFSET(BTH_DESTQP_BIT_OFFSET)
+#define BTH_DESTQP_MASK         0xFFull
+#define BTH_DESTQP_VALUE        0x81ull
+
+/* DETH.SQPN: QW 1 Offset 56 for select */
+/* We use 8 most significant Soure QPN bits as entropy fpr AIP */
+#define DETH_AIP_SQPN_QW 3ull
+#define DETH_AIP_SQPN_BIT_OFFSET 56ull
+#define DETH_AIP_SQPN_OFFSET(off) ((DETH_AIP_SQPN_QW << QW_SHIFT) | (off))
+#define DETH_AIP_SQPN_SELECT_OFFSET \
+	DETH_AIP_SQPN_OFFSET(DETH_AIP_SQPN_BIT_OFFSET)
 
 /* RSM fields for Vnic */
 /* L2_TYPE: QW 0, OFFSET 61 - for match */
@@ -274,7 +251,7 @@ struct flag_table {
 /*
  * CCE Error flags.
  */
-static struct flag_table cce_err_status_flags[] = {
+static const struct flag_table cce_err_status_flags[] = {
 /* 0*/	FLAG_ENTRY0("CceCsrParityErr",
 		CCE_ERR_STATUS_CCE_CSR_PARITY_ERR_SMASK),
 /* 1*/	FLAG_ENTRY0("CceCsrReadBadAddrErr",
@@ -364,7 +341,7 @@ static struct flag_table cce_err_status_flags[] = {
  * Misc Error flags
  */
 #define MES(text) MISC_ERR_STATUS_MISC_##text##_ERR_SMASK
-static struct flag_table misc_err_status_flags[] = {
+static const struct flag_table misc_err_status_flags[] = {
 /* 0*/	FLAG_ENTRY0("CSR_PARITY", MES(CSR_PARITY)),
 /* 1*/	FLAG_ENTRY0("CSR_READ_BAD_ADDR", MES(CSR_READ_BAD_ADDR)),
 /* 2*/	FLAG_ENTRY0("CSR_WRITE_BAD_ADDR", MES(CSR_WRITE_BAD_ADDR)),
@@ -383,7 +360,7 @@ static struct flag_table misc_err_status_flags[] = {
 /*
  * TXE PIO Error flags and consequences
  */
-static struct flag_table pio_err_status_flags[] = {
+static const struct flag_table pio_err_status_flags[] = {
 /* 0*/	FLAG_ENTRY("PioWriteBadCtxt",
 	SEC_WRITE_DROPPED,
 	SEND_PIO_ERR_STATUS_PIO_WRITE_BAD_CTXT_ERR_SMASK),
@@ -525,7 +502,7 @@ static struct flag_table pio_err_status_flags[] = {
 /*
  * TXE SDMA Error flags
  */
-static struct flag_table sdma_err_status_flags[] = {
+static const struct flag_table sdma_err_status_flags[] = {
 /* 0*/	FLAG_ENTRY0("SDmaRpyTagErr",
 		SEND_DMA_ERR_STATUS_SDMA_RPY_TAG_ERR_SMASK),
 /* 1*/	FLAG_ENTRY0("SDmaCsrParityErr",
@@ -553,7 +530,7 @@ static struct flag_table sdma_err_status_flags[] = {
  * TXE Egress Error flags
  */
 #define SEES(text) SEND_EGRESS_ERR_STATUS_##text##_ERR_SMASK
-static struct flag_table egress_err_status_flags[] = {
+static const struct flag_table egress_err_status_flags[] = {
 /* 0*/	FLAG_ENTRY0("TxPktIntegrityMemCorErr", SEES(TX_PKT_INTEGRITY_MEM_COR)),
 /* 1*/	FLAG_ENTRY0("TxPktIntegrityMemUncErr", SEES(TX_PKT_INTEGRITY_MEM_UNC)),
 /* 2 reserved */
@@ -654,7 +631,7 @@ static struct flag_table egress_err_status_flags[] = {
  * TXE Egress Error Info flags
  */
 #define SEEI(text) SEND_EGRESS_ERR_INFO_##text##_ERR_SMASK
-static struct flag_table egress_err_info_flags[] = {
+static const struct flag_table egress_err_info_flags[] = {
 /* 0*/	FLAG_ENTRY0("Reserved", 0ull),
 /* 1*/	FLAG_ENTRY0("VLErr", SEEI(VL)),
 /* 2*/	FLAG_ENTRY0("JobKeyErr", SEEI(JOB_KEY)),
@@ -703,7 +680,7 @@ static struct flag_table egress_err_info_flags[] = {
  * TXE Send error flags
  */
 #define SES(name) SEND_ERR_STATUS_SEND_##name##_ERR_SMASK
-static struct flag_table send_err_status_flags[] = {
+static const struct flag_table send_err_status_flags[] = {
 /* 0*/	FLAG_ENTRY0("SendCsrParityErr", SES(CSR_PARITY)),
 /* 1*/	FLAG_ENTRY0("SendCsrReadBadAddrErr", SES(CSR_READ_BAD_ADDR)),
 /* 2*/	FLAG_ENTRY0("SendCsrWriteBadAddrErr", SES(CSR_WRITE_BAD_ADDR))
@@ -712,7 +689,7 @@ static struct flag_table send_err_status_flags[] = {
 /*
  * TXE Send Context Error flags and consequences
  */
-static struct flag_table sc_err_status_flags[] = {
+static const struct flag_table sc_err_status_flags[] = {
 /* 0*/	FLAG_ENTRY("InconsistentSop",
 		SEC_PACKET_DROPPED | SEC_SC_HALTED,
 		SEND_CTXT_ERR_STATUS_PIO_INCONSISTENT_SOP_ERR_SMASK),
@@ -735,7 +712,7 @@ static struct flag_table sc_err_status_flags[] = {
  * RXE Receive Error flags
  */
 #define RXES(name) RCV_ERR_STATUS_RX_##name##_ERR_SMASK
-static struct flag_table rxe_err_status_flags[] = {
+static const struct flag_table rxe_err_status_flags[] = {
 /* 0*/	FLAG_ENTRY0("RxDmaCsrCorErr", RXES(DMA_CSR_COR)),
 /* 1*/	FLAG_ENTRY0("RxDcIntfParityErr", RXES(DC_INTF_PARITY)),
 /* 2*/	FLAG_ENTRY0("RxRcvHdrUncErr", RXES(RCV_HDR_UNC)),
@@ -870,7 +847,7 @@ static struct flag_table rxe_err_status_flags[] = {
  * DCC Error Flags
  */
 #define DCCE(name) DCC_ERR_FLG_##name##_SMASK
-static struct flag_table dcc_err_flags[] = {
+static const struct flag_table dcc_err_flags[] = {
 	FLAG_ENTRY0("bad_l2_err", DCCE(BAD_L2_ERR)),
 	FLAG_ENTRY0("bad_sc_err", DCCE(BAD_SC_ERR)),
 	FLAG_ENTRY0("bad_mid_tail_err", DCCE(BAD_MID_TAIL_ERR)),
@@ -923,7 +900,7 @@ static struct flag_table dcc_err_flags[] = {
  * LCB error flags
  */
 #define LCBE(name) DC_LCB_ERR_FLG_##name##_SMASK
-static struct flag_table lcb_err_flags[] = {
+static const struct flag_table lcb_err_flags[] = {
 /* 0*/	FLAG_ENTRY0("CSR_PARITY_ERR", LCBE(CSR_PARITY_ERR)),
 /* 1*/	FLAG_ENTRY0("INVALID_CSR_ADDR", LCBE(INVALID_CSR_ADDR)),
 /* 2*/	FLAG_ENTRY0("RST_FOR_FAILED_DESKEW", LCBE(RST_FOR_FAILED_DESKEW)),
@@ -966,7 +943,7 @@ static struct flag_table lcb_err_flags[] = {
  * DC8051 Error Flags
  */
 #define D8E(name) DC_DC8051_ERR_FLG_##name##_SMASK
-static struct flag_table dc8051_err_flags[] = {
+static const struct flag_table dc8051_err_flags[] = {
 	FLAG_ENTRY0("SET_BY_8051", D8E(SET_BY_8051)),
 	FLAG_ENTRY0("LOST_8051_HEART_BEAT", D8E(LOST_8051_HEART_BEAT)),
 	FLAG_ENTRY0("CRAM_MBE", D8E(CRAM_MBE)),
@@ -985,7 +962,7 @@ static struct flag_table dc8051_err_flags[] = {
  *
  * Flags in DC8051_DBG_ERR_INFO_SET_BY_8051.ERROR field.
  */
-static struct flag_table dc8051_info_err_flags[] = {
+static const struct flag_table dc8051_info_err_flags[] = {
 	FLAG_ENTRY0("Spico ROM check failed",  SPICO_ROM_FAILED),
 	FLAG_ENTRY0("Unknown frame received",  UNKNOWN_FRAME),
 	FLAG_ENTRY0("Target BER not met",      TARGET_BER_NOT_MET),
@@ -1009,7 +986,7 @@ static struct flag_table dc8051_info_err_flags[] = {
  *
  * Flags in DC8051_DBG_ERR_INFO_SET_BY_8051.HOST_MSG field.
  */
-static struct flag_table dc8051_info_host_msg_flags[] = {
+static const struct flag_table dc8051_info_host_msg_flags[] = {
 	FLAG_ENTRY0("Host request done", 0x0001),
 	FLAG_ENTRY0("BC PWR_MGM message", 0x0002),
 	FLAG_ENTRY0("BC SMA message", 0x0004),
@@ -1079,7 +1056,7 @@ static void read_link_down_reason(struct hfi1_devdata *dd, u8 *ldr);
 static void handle_temp_err(struct hfi1_devdata *dd);
 static void dc_shutdown(struct hfi1_devdata *dd);
 static void dc_start(struct hfi1_devdata *dd);
-static int qos_rmt_entries(struct hfi1_devdata *dd, unsigned int *mp,
+static int qos_rmt_entries(unsigned int n_krcv_queues, unsigned int *mp,
 			   unsigned int *np);
 static void clear_full_mgmt_pkey(struct hfi1_pportdata *ppd);
 static int wait_link_transfer_active(struct hfi1_devdata *dd, int wait_ms);
@@ -1304,9 +1281,9 @@ CNTR_ELEM(#name, \
 	  access_ibp_##cntr)
 
 /**
- * hfi_addr_from_offset - return addr for readq/writeq
- * @dd - the dd device
- * @offset - the offset of the CSR within bar0
+ * hfi1_addr_from_offset - return addr for readq/writeq
+ * @dd: the dd device
+ * @offset: the offset of the CSR within bar0
  *
  * This routine selects the appropriate base address
  * based on the indicated offset.
@@ -1322,8 +1299,8 @@ static inline void __iomem *hfi1_addr_from_offset(
 
 /**
  * read_csr - read CSR at the indicated offset
- * @dd - the dd device
- * @offset - the offset of the CSR within bar0
+ * @dd: the dd device
+ * @offset: the offset of the CSR within bar0
  *
  * Return: the value read or all FF's if there
  * is no mapping
@@ -1337,9 +1314,9 @@ u64 read_csr(const struct hfi1_devdata *dd, u32 offset)
 
 /**
  * write_csr - write CSR at the indicated offset
- * @dd - the dd device
- * @offset - the offset of the CSR within bar0
- * @value - value to write
+ * @dd: the dd device
+ * @offset: the offset of the CSR within bar0
+ * @value: value to write
  */
 void write_csr(const struct hfi1_devdata *dd, u32 offset, u64 value)
 {
@@ -1355,8 +1332,8 @@ void write_csr(const struct hfi1_devdata *dd, u32 offset, u64 value)
 
 /**
  * get_csr_addr - return te iomem address for offset
- * @dd - the dd device
- * @offset - the offset of the CSR within bar0
+ * @dd: the dd device
+ * @offset: the offset of the CSR within bar0
  *
  * Return: The iomem address to use in subsequent
  * writeq/readq operations.
@@ -1484,7 +1461,8 @@ static u64 dc_access_lcb_cntr(const struct cntr_entry *entry, void *context,
 		ret = write_lcb_csr(dd, csr, data);
 
 	if (ret) {
-		dd_dev_err(dd, "Could not acquire LCB for counter 0x%x", csr);
+		if (!(dd->flags & HFI1_SHUTDOWN))
+			dd_dev_err(dd, "Could not acquire LCB for counter 0x%x", csr);
 		return 0;
 	}
 
@@ -1683,6 +1661,14 @@ static u64 access_sw_pio_drain(const struct cntr_entry *entry,
 	struct hfi1_devdata *dd = (struct hfi1_devdata *)context;
 
 	return dd->verbs_dev.n_piodrain;
+}
+
+static u64 access_sw_ctx0_seq_drop(const struct cntr_entry *entry,
+				   void *context, int vl, int mode, u64 data)
+{
+	struct hfi1_devdata *dd = context;
+
+	return dd->ctx0_seq_drop;
 }
 
 static u64 access_sw_vtx_wait(const struct cntr_entry *entry,
@@ -4101,10 +4087,12 @@ def_access_ibp_counter(rc_dupreq);
 def_access_ibp_counter(rdma_seq);
 def_access_ibp_counter(unaligned);
 def_access_ibp_counter(seq_naks);
+def_access_ibp_counter(rc_crwaits);
 
 static struct cntr_entry dev_cntrs[DEV_CNTR_LAST] = {
 [C_RCV_OVF] = RXE32_DEV_CNTR_ELEM(RcvOverflow, RCV_BUF_OVFL_CNT, CNTR_SYNTH),
 [C_RX_LEN_ERR] = RXE32_DEV_CNTR_ELEM(RxLenErr, RCV_LENGTH_ERR_CNT, CNTR_SYNTH),
+[C_RX_SHORT_ERR] = RXE32_DEV_CNTR_ELEM(RxShrErr, RCV_SHORT_ERR_CNT, CNTR_SYNTH),
 [C_RX_ICRC_ERR] = RXE32_DEV_CNTR_ELEM(RxICrcErr, RCV_ICRC_ERR_CNT, CNTR_SYNTH),
 [C_RX_EBP] = RXE32_DEV_CNTR_ELEM(RxEbpCnt, RCV_EBP_CNT, CNTR_SYNTH),
 [C_RX_TID_FULL] = RXE32_DEV_CNTR_ELEM(RxTIDFullEr, RCV_TID_FULL_ERR_CNT,
@@ -4248,6 +4236,8 @@ static struct cntr_entry dev_cntrs[DEV_CNTR_LAST] = {
 			    access_sw_cpu_intr),
 [C_SW_CPU_RCV_LIM] = CNTR_ELEM("RcvLimit", 0, 0, CNTR_NORMAL,
 			    access_sw_cpu_rcv_limit),
+[C_SW_CTX0_SEQ_DROP] = CNTR_ELEM("SeqDrop0", 0, 0, CNTR_NORMAL,
+			    access_sw_ctx0_seq_drop),
 [C_SW_VTX_WAIT] = CNTR_ELEM("vTxWait", 0, 0, CNTR_NORMAL,
 			    access_sw_vtx_wait),
 [C_SW_PIO_WAIT] = CNTR_ELEM("PioWait", 0, 0, CNTR_NORMAL,
@@ -5119,6 +5109,7 @@ static struct cntr_entry port_cntrs[PORT_CNTR_LAST] = {
 [C_SW_IBP_RDMA_SEQ] = SW_IBP_CNTR(RdmaSeq, rdma_seq),
 [C_SW_IBP_UNALIGNED] = SW_IBP_CNTR(Unaligned, unaligned),
 [C_SW_IBP_SEQ_NAK] = SW_IBP_CNTR(SeqNak, seq_naks),
+[C_SW_IBP_RC_CRWAITS] = SW_IBP_CNTR(RcCrWait, rc_crwaits),
 [C_SW_CPU_RC_ACKS] = CNTR_ELEM("RcAcks", 0, 0, CNTR_NORMAL,
 			       access_sw_cpu_rc_acks),
 [C_SW_CPU_RC_QACKS] = CNTR_ELEM("RcQacks", 0, 0, CNTR_NORMAL,
@@ -5284,7 +5275,7 @@ done:
  * the buffer.  End in '*' if the buffer is too short.
  */
 static char *flag_string(char *buf, int buf_len, u64 flags,
-			 struct flag_table *table, int table_size)
+			 const struct flag_table *table, int table_size)
 {
 	char extra[32];
 	char *p = buf;
@@ -5343,7 +5334,7 @@ static const char * const cce_misc_names[] = {
 static char *is_misc_err_name(char *buf, size_t bsize, unsigned int source)
 {
 	if (source < ARRAY_SIZE(cce_misc_names))
-		strncpy(buf, cce_misc_names[source], bsize);
+		strscpy_pad(buf, cce_misc_names[source], bsize);
 	else
 		snprintf(buf, bsize, "Reserved%u",
 			 source + IS_GENERAL_ERR_START);
@@ -5383,7 +5374,7 @@ static const char * const various_names[] = {
 static char *is_various_name(char *buf, size_t bsize, unsigned int source)
 {
 	if (source < ARRAY_SIZE(various_names))
-		strncpy(buf, various_names[source], bsize);
+		strscpy_pad(buf, various_names[source], bsize);
 	else
 		snprintf(buf, bsize, "Reserved%u", source + IS_VARIOUS_START);
 	return buf;
@@ -6170,7 +6161,7 @@ static int request_host_lcb_access(struct hfi1_devdata *dd)
 	ret = do_8051_command(dd, HCMD_MISC,
 			      (u64)HCMD_MISC_REQUEST_LCB_ACCESS <<
 			      LOAD_DATA_FIELD_ID_SHIFT, NULL);
-	if (ret != HCMD_SUCCESS) {
+	if (ret != HCMD_SUCCESS && !(dd->flags & HFI1_SHUTDOWN)) {
 		dd_dev_err(dd, "%s: command failed with error %d\n",
 			   __func__, ret);
 	}
@@ -6251,7 +6242,8 @@ int acquire_lcb_access(struct hfi1_devdata *dd, int sleep_ok)
 	if (dd->lcb_access_count == 0) {
 		ret = request_host_lcb_access(dd);
 		if (ret) {
-			dd_dev_err(dd,
+			if (!(dd->flags & HFI1_SHUTDOWN))
+				dd_dev_err(dd,
 				   "%s: unable to acquire LCB access, err %d\n",
 				   __func__, ret);
 			goto done;
@@ -6860,7 +6852,7 @@ static void rxe_kernel_unfreeze(struct hfi1_devdata *dd)
 		}
 		rcvmask = HFI1_RCVCTRL_CTXT_ENB;
 		/* HFI1_RCVCTRL_TAILUPD_[ENB|DIS] needs to be set explicitly */
-		rcvmask |= rcd->rcvhdrtail_kvaddr ?
+		rcvmask |= hfi1_rcvhdrtail_kvaddr(rcd) ?
 			HFI1_RCVCTRL_TAILUPD_ENB : HFI1_RCVCTRL_TAILUPD_DIS;
 		hfi1_rcvctrl(dd, rcvmask, rcd);
 		hfi1_rcd_put(rcd);
@@ -7286,11 +7278,11 @@ static u16 link_width_to_bits(struct hfi1_devdata *dd, u16 width)
 	case 1: return OPA_LINK_WIDTH_1X;
 	case 2: return OPA_LINK_WIDTH_2X;
 	case 3: return OPA_LINK_WIDTH_3X;
+	case 4: return OPA_LINK_WIDTH_4X;
 	default:
 		dd_dev_info(dd, "%s: invalid width %d, using 4\n",
 			    __func__, width);
-		/* fall through */
-	case 4: return OPA_LINK_WIDTH_4X;
+		return OPA_LINK_WIDTH_4X;
 	}
 }
 
@@ -7345,12 +7337,13 @@ static void get_link_widths(struct hfi1_devdata *dd, u16 *tx_width,
 		case 0:
 			dd->pport[0].link_speed_active = OPA_LINK_SPEED_12_5G;
 			break;
+		case 1:
+			dd->pport[0].link_speed_active = OPA_LINK_SPEED_25G;
+			break;
 		default:
 			dd_dev_err(dd,
 				   "%s: unexpected max rate %d, using 25Gb\n",
 				   __func__, (int)max_rate);
-			/* fall through */
-		case 1:
 			dd->pport[0].link_speed_active = OPA_LINK_SPEED_25G;
 			break;
 		}
@@ -8284,7 +8277,7 @@ static void is_interrupt(struct hfi1_devdata *dd, unsigned int source)
 }
 
 /**
- * gerneral_interrupt() -  General interrupt handler
+ * general_interrupt -  General interrupt handler
  * @irq: MSIx IRQ vector
  * @data: hfi1 devdata
  *
@@ -8392,20 +8385,107 @@ void force_recv_intr(struct hfi1_ctxtdata *rcd)
 static inline int check_packet_present(struct hfi1_ctxtdata *rcd)
 {
 	u32 tail;
-	int present;
 
-	if (!rcd->rcvhdrtail_kvaddr)
-		present = (rcd->seq_cnt ==
-				rhf_rcv_seq(rhf_to_cpu(get_rhf_addr(rcd))));
-	else /* is RDMA rtail */
-		present = (rcd->head != get_rcvhdrtail(rcd));
-
-	if (present)
+	if (hfi1_packet_present(rcd))
 		return 1;
 
 	/* fall back to a CSR read, correct indpendent of DMA_RTAIL */
 	tail = (u32)read_uctxt_csr(rcd->dd, rcd->ctxt, RCV_HDR_TAIL);
-	return rcd->head != tail;
+	return hfi1_rcd_head(rcd) != tail;
+}
+
+/*
+ * Common code for receive contexts interrupt handlers.
+ * Update traces, increment kernel IRQ counter and
+ * setup ASPM when needed.
+ */
+static void receive_interrupt_common(struct hfi1_ctxtdata *rcd)
+{
+	struct hfi1_devdata *dd = rcd->dd;
+
+	trace_hfi1_receive_interrupt(dd, rcd);
+	this_cpu_inc(*dd->int_counter);
+	aspm_ctx_disable(rcd);
+}
+
+/*
+ * __hfi1_rcd_eoi_intr() - Make HW issue receive interrupt
+ * when there are packets present in the queue. When calling
+ * with interrupts enabled please use hfi1_rcd_eoi_intr.
+ *
+ * @rcd: valid receive context
+ */
+static void __hfi1_rcd_eoi_intr(struct hfi1_ctxtdata *rcd)
+{
+	if (!rcd->rcvhdrq)
+		return;
+	clear_recv_intr(rcd);
+	if (check_packet_present(rcd))
+		force_recv_intr(rcd);
+}
+
+/**
+ * hfi1_rcd_eoi_intr() - End of Interrupt processing action
+ *
+ * @rcd: Ptr to hfi1_ctxtdata of receive context
+ *
+ *  Hold IRQs so we can safely clear the interrupt and
+ *  recheck for a packet that may have arrived after the previous
+ *  check and the interrupt clear.  If a packet arrived, force another
+ *  interrupt. This routine can be called at the end of receive packet
+ *  processing in interrupt service routines, interrupt service thread
+ *  and softirqs
+ */
+static void hfi1_rcd_eoi_intr(struct hfi1_ctxtdata *rcd)
+{
+	unsigned long flags;
+
+	local_irq_save(flags);
+	__hfi1_rcd_eoi_intr(rcd);
+	local_irq_restore(flags);
+}
+
+/**
+ * hfi1_netdev_rx_napi - napi poll function to move eoi inline
+ * @napi: pointer to napi object
+ * @budget: netdev budget
+ */
+int hfi1_netdev_rx_napi(struct napi_struct *napi, int budget)
+{
+	struct hfi1_netdev_rxq *rxq = container_of(napi,
+			struct hfi1_netdev_rxq, napi);
+	struct hfi1_ctxtdata *rcd = rxq->rcd;
+	int work_done = 0;
+
+	work_done = rcd->do_interrupt(rcd, budget);
+
+	if (work_done < budget) {
+		napi_complete_done(napi, work_done);
+		hfi1_rcd_eoi_intr(rcd);
+	}
+
+	return work_done;
+}
+
+/* Receive packet napi handler for netdevs VNIC and AIP  */
+irqreturn_t receive_context_interrupt_napi(int irq, void *data)
+{
+	struct hfi1_ctxtdata *rcd = data;
+
+	receive_interrupt_common(rcd);
+
+	if (likely(rcd->napi)) {
+		if (likely(napi_schedule_prep(rcd->napi)))
+			__napi_schedule_irqoff(rcd->napi);
+		else
+			__hfi1_rcd_eoi_intr(rcd);
+	} else {
+		WARN_ONCE(1, "Napi IRQ handler without napi set up ctxt=%d\n",
+			  rcd->ctxt);
+		__hfi1_rcd_eoi_intr(rcd);
+	}
+
+	return IRQ_HANDLED;
 }
 
 /*
@@ -8419,13 +8499,9 @@ static inline int check_packet_present(struct hfi1_ctxtdata *rcd)
 irqreturn_t receive_context_interrupt(int irq, void *data)
 {
 	struct hfi1_ctxtdata *rcd = data;
-	struct hfi1_devdata *dd = rcd->dd;
 	int disposition;
-	int present;
 
-	trace_hfi1_receive_interrupt(dd, rcd);
-	this_cpu_inc(*dd->int_counter);
-	aspm_ctx_disable(rcd);
+	receive_interrupt_common(rcd);
 
 	/* receive interrupt remains blocked while processing packets */
 	disposition = rcd->do_interrupt(rcd, 0);
@@ -8438,17 +8514,7 @@ irqreturn_t receive_context_interrupt(int irq, void *data)
 	if (disposition == RCV_PKT_LIMIT)
 		return IRQ_WAKE_THREAD;
 
-	/*
-	 * The packet processor detected no more packets.  Clear the receive
-	 * interrupt and recheck for a packet packet that may have arrived
-	 * after the previous check and interrupt clear.  If a packet arrived,
-	 * force another interrupt.
-	 */
-	clear_recv_intr(rcd);
-	present = check_packet_present(rcd);
-	if (present)
-		force_recv_intr(rcd);
-
+	__hfi1_rcd_eoi_intr(rcd);
 	return IRQ_HANDLED;
 }
 
@@ -8459,24 +8525,11 @@ irqreturn_t receive_context_interrupt(int irq, void *data)
 irqreturn_t receive_context_thread(int irq, void *data)
 {
 	struct hfi1_ctxtdata *rcd = data;
-	int present;
 
 	/* receive interrupt is still blocked from the IRQ handler */
 	(void)rcd->do_interrupt(rcd, 1);
 
-	/*
-	 * The packet processor will only return if it detected no more
-	 * packets.  Hold IRQs here so we can safely clear the interrupt and
-	 * recheck for a packet that may have arrived after the previous
-	 * check and the interrupt clear.  If a packet arrived, force another
-	 * interrupt.
-	 */
-	local_irq_disable();
-	clear_recv_intr(rcd);
-	present = check_packet_present(rcd);
-	if (present)
-		force_recv_intr(rcd);
-	local_irq_enable();
+	hfi1_rcd_eoi_intr(rcd);
 
 	return IRQ_HANDLED;
 }
@@ -8702,7 +8755,7 @@ static int do_8051_command(struct hfi1_devdata *dd, u32 type, u64 in_data,
 
 	/*
 	 * When writing a LCB CSR, out_data contains the full value to
-	 * to be written, while in_data contains the relative LCB
+	 * be written, while in_data contains the relative LCB
 	 * address in 7:0.  Do the work here, rather than the caller,
 	 * of distrubting the write data to where it needs to go:
 	 *
@@ -9850,6 +9903,7 @@ void hfi1_quiet_serdes(struct hfi1_pportdata *ppd)
 
 	/* disable the port */
 	clear_rcvctrl(dd, RCV_CTRL_RCV_PORT_ENABLE_SMASK);
+	cancel_work_sync(&ppd->freeze_work);
 }
 
 static inline int init_cpu_counters(struct hfi1_devdata *dd)
@@ -10046,12 +10100,12 @@ u32 lrh_max_header_bytes(struct hfi1_devdata *dd)
 	 * the first kernel context would have been allocated by now so
 	 * we are guaranteed a valid value.
 	 */
-	return (dd->rcd[0]->rcvhdrqentsize - 2/*PBC/RHF*/ + 1/*ICRC*/) << 2;
+	return (get_hdrqentsize(dd->rcd[0]) - 2/*PBC/RHF*/ + 1/*ICRC*/) << 2;
 }
 
 /*
  * Set Send Length
- * @ppd - per port data
+ * @ppd: per port data
  *
  * Set the MTU by limiting how many DWs may be sent.  The SendLenCheck*
  * registers compare against LRH.PktLen, so use the max bytes included
@@ -10091,7 +10145,7 @@ static void set_send_length(struct hfi1_pportdata *ppd)
 		thres = min(sc_percent_to_threshold(dd->vld[i].sc, 50),
 			    sc_mtu_to_threshold(dd->vld[i].sc,
 						dd->vld[i].mtu,
-						dd->rcd[0]->rcvhdrqentsize));
+						get_hdrqentsize(dd->rcd[0])));
 		for (j = 0; j < INIT_SC_PER_VL; j++)
 			sc_set_cr_threshold(
 					pio_select_send_context_vl(dd, j, i),
@@ -11818,7 +11872,7 @@ u32 hdrqempty(struct hfi1_ctxtdata *rcd)
 	head = (read_uctxt_csr(rcd->dd, rcd->ctxt, RCV_HDR_HEAD)
 		& RCV_HDR_HEAD_HEAD_SMASK) >> RCV_HDR_HEAD_HEAD_SHIFT;
 
-	if (rcd->rcvhdrtail_kvaddr)
+	if (hfi1_rcvhdrtail_kvaddr(rcd))
 		tail = get_rcvhdrtail(rcd);
 	else
 		tail = read_uctxt_csr(rcd->dd, rcd->ctxt, RCV_HDR_TAIL);
@@ -11862,6 +11916,84 @@ static u32 encoded_size(u32 size)
 	return 0x1;	/* if invalid, go with the minimum size */
 }
 
+/**
+ * encode_rcv_header_entry_size - return chip specific encoding for size
+ * @size: size in dwords
+ *
+ * Convert a receive header entry size that to the encoding used in the CSR.
+ *
+ * Return a zero if the given size is invalid, otherwise the encoding.
+ */
+u8 encode_rcv_header_entry_size(u8 size)
+{
+	/* there are only 3 valid receive header entry sizes */
+	if (size == 2)
+		return 1;
+	if (size == 16)
+		return 2;
+	if (size == 32)
+		return 4;
+	return 0; /* invalid */
+}
+
+/**
+ * hfi1_validate_rcvhdrcnt - validate hdrcnt
+ * @dd: the device data
+ * @thecnt: the header count
+ */
+int hfi1_validate_rcvhdrcnt(struct hfi1_devdata *dd, uint thecnt)
+{
+	if (thecnt <= HFI1_MIN_HDRQ_EGRBUF_CNT) {
+		dd_dev_err(dd, "Receive header queue count too small\n");
+		return -EINVAL;
+	}
+
+	if (thecnt > HFI1_MAX_HDRQ_EGRBUF_CNT) {
+		dd_dev_err(dd,
+			   "Receive header queue count cannot be greater than %u\n",
+			   HFI1_MAX_HDRQ_EGRBUF_CNT);
+		return -EINVAL;
+	}
+
+	if (thecnt % HDRQ_INCREMENT) {
+		dd_dev_err(dd, "Receive header queue count %d must be divisible by %lu\n",
+			   thecnt, HDRQ_INCREMENT);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+/**
+ * set_hdrq_regs - set header queue registers for context
+ * @dd: the device data
+ * @ctxt: the context
+ * @entsize: the dword entry size
+ * @hdrcnt: the number of header entries
+ */
+void set_hdrq_regs(struct hfi1_devdata *dd, u8 ctxt, u8 entsize, u16 hdrcnt)
+{
+	u64 reg;
+
+	reg = (((u64)hdrcnt >> HDRQ_SIZE_SHIFT) & RCV_HDR_CNT_CNT_MASK) <<
+	      RCV_HDR_CNT_CNT_SHIFT;
+	write_kctxt_csr(dd, ctxt, RCV_HDR_CNT, reg);
+	reg = ((u64)encode_rcv_header_entry_size(entsize) &
+	       RCV_HDR_ENT_SIZE_ENT_SIZE_MASK) <<
+	      RCV_HDR_ENT_SIZE_ENT_SIZE_SHIFT;
+	write_kctxt_csr(dd, ctxt, RCV_HDR_ENT_SIZE, reg);
+	reg = ((u64)DEFAULT_RCVHDRSIZE & RCV_HDR_SIZE_HDR_SIZE_MASK) <<
+	      RCV_HDR_SIZE_HDR_SIZE_SHIFT;
+	write_kctxt_csr(dd, ctxt, RCV_HDR_SIZE, reg);
+
+	/*
+	 * Program dummy tail address for every receive context
+	 * before enabling any receive context
+	 */
+	write_kctxt_csr(dd, ctxt, RCV_HDR_TAIL_ADDR,
+			dd->rcvhdrtail_dummy_dma);
+}
+
 void hfi1_rcvctrl(struct hfi1_devdata *dd, unsigned int op,
 		  struct hfi1_ctxtdata *rcd)
 {
@@ -11883,13 +12015,13 @@ void hfi1_rcvctrl(struct hfi1_devdata *dd, unsigned int op,
 		/* reset the tail and hdr addresses, and sequence count */
 		write_kctxt_csr(dd, ctxt, RCV_HDR_ADDR,
 				rcd->rcvhdrq_dma);
-		if (rcd->rcvhdrtail_kvaddr)
+		if (hfi1_rcvhdrtail_kvaddr(rcd))
 			write_kctxt_csr(dd, ctxt, RCV_HDR_TAIL_ADDR,
 					rcd->rcvhdrqtailaddr_dma);
-		rcd->seq_cnt = 1;
+		hfi1_set_seq_cnt(rcd, 1);
 
 		/* reset the cached receive header queue head value */
-		rcd->head = 0;
+		hfi1_set_rcd_head(rcd, 0);
 
 		/*
 		 * Zero the receive header queue so we don't get false
@@ -11969,7 +12101,7 @@ void hfi1_rcvctrl(struct hfi1_devdata *dd, unsigned int op,
 			      IS_RCVAVAIL_START + rcd->ctxt, false);
 		rcvctrl &= ~RCV_CTXT_CTRL_INTR_AVAIL_SMASK;
 	}
-	if ((op & HFI1_RCVCTRL_TAILUPD_ENB) && rcd->rcvhdrtail_kvaddr)
+	if ((op & HFI1_RCVCTRL_TAILUPD_ENB) && hfi1_rcvhdrtail_kvaddr(rcd))
 		rcvctrl |= RCV_CTXT_CTRL_TAIL_UPD_SMASK;
 	if (op & HFI1_RCVCTRL_TAILUPD_DIS) {
 		/* See comment on RcvCtxtCtrl.TailUpd above */
@@ -12005,7 +12137,7 @@ void hfi1_rcvctrl(struct hfi1_devdata *dd, unsigned int op,
 		set_intr_bits(dd, IS_RCVURGENT_START + rcd->ctxt,
 			      IS_RCVURGENT_START + rcd->ctxt, false);
 
-	hfi1_cdbg(RCVCTRL, "ctxt %d rcvctrl 0x%llx\n", ctxt, rcvctrl);
+	hfi1_cdbg(RCVCTRL, "ctxt %d rcvctrl 0x%llx", ctxt, rcvctrl);
 	write_kctxt_csr(dd, ctxt, RCV_CTXT_CTRL, rcvctrl);
 
 	/* work around sticky RcvCtxtStatus.BlockedRHQFull */
@@ -12075,10 +12207,10 @@ u32 hfi1_read_cntrs(struct hfi1_devdata *dd, char **namep, u64 **cntrp)
 			hfi1_cdbg(CNTR, "reading %s", entry->name);
 			if (entry->flags & CNTR_DISABLED) {
 				/* Nothing */
-				hfi1_cdbg(CNTR, "\tDisabled\n");
+				hfi1_cdbg(CNTR, "\tDisabled");
 			} else {
 				if (entry->flags & CNTR_VL) {
-					hfi1_cdbg(CNTR, "\tPer VL\n");
+					hfi1_cdbg(CNTR, "\tPer VL");
 					for (j = 0; j < C_VL_COUNT; j++) {
 						val = entry->rw_cntr(entry,
 								  dd, j,
@@ -12086,21 +12218,21 @@ u32 hfi1_read_cntrs(struct hfi1_devdata *dd, char **namep, u64 **cntrp)
 								  0);
 						hfi1_cdbg(
 						   CNTR,
-						   "\t\tRead 0x%llx for %d\n",
+						   "\t\tRead 0x%llx for %d",
 						   val, j);
 						dd->cntrs[entry->offset + j] =
 									    val;
 					}
 				} else if (entry->flags & CNTR_SDMA) {
 					hfi1_cdbg(CNTR,
-						  "\t Per SDMA Engine\n");
+						  "\t Per SDMA Engine");
 					for (j = 0; j < chip_sdma_engines(dd);
 					     j++) {
 						val =
 						entry->rw_cntr(entry, dd, j,
 							       CNTR_MODE_R, 0);
 						hfi1_cdbg(CNTR,
-							  "\t\tRead 0x%llx for %d\n",
+							  "\t\tRead 0x%llx for %d",
 							  val, j);
 						dd->cntrs[entry->offset + j] =
 									val;
@@ -12141,7 +12273,7 @@ u32 hfi1_read_portcntrs(struct hfi1_pportdata *ppd, char **namep, u64 **cntrp)
 			hfi1_cdbg(CNTR, "reading %s", entry->name);
 			if (entry->flags & CNTR_DISABLED) {
 				/* Nothing */
-				hfi1_cdbg(CNTR, "\tDisabled\n");
+				hfi1_cdbg(CNTR, "\tDisabled");
 				continue;
 			}
 
@@ -12177,6 +12309,7 @@ static void free_cntrs(struct hfi1_devdata *dd)
 
 	if (dd->synth_stats_timer.function)
 		del_timer_sync(&dd->synth_stats_timer);
+	cancel_work_sync(&dd->update_cntr_work);
 	ppd = (struct hfi1_pportdata *)(dd + 1);
 	for (i = 0; i < dd->num_pports; i++, ppd++) {
 		kfree(ppd->cntrs);
@@ -12383,7 +12516,7 @@ static void do_update_synth_timer(struct work_struct *work)
 
 	hfi1_cdbg(
 	    CNTR,
-	    "[%d] curr tx=0x%llx rx=0x%llx :: last tx=0x%llx rx=0x%llx\n",
+	    "[%d] curr tx=0x%llx rx=0x%llx :: last tx=0x%llx rx=0x%llx",
 	    dd->unit, cur_tx, cur_rx, dd->last_tx, dd->last_rx);
 
 	if ((cur_tx < dd->last_tx) || (cur_rx < dd->last_rx)) {
@@ -12397,7 +12530,7 @@ static void do_update_synth_timer(struct work_struct *work)
 	} else {
 		total_flits = (cur_tx - dd->last_tx) + (cur_rx - dd->last_rx);
 		hfi1_cdbg(CNTR,
-			  "[%d] total flits 0x%llx limit 0x%llx\n", dd->unit,
+			  "[%d] total flits 0x%llx limit 0x%llx", dd->unit,
 			  total_flits, (u64)CNTR_32BIT_MAX);
 		if (total_flits >= CNTR_32BIT_MAX) {
 			hfi1_cdbg(CNTR, "[%d] 32bit limit hit, updating",
@@ -12710,11 +12843,6 @@ bail:
 static u32 chip_to_opa_lstate(struct hfi1_devdata *dd, u32 chip_lstate)
 {
 	switch (chip_lstate) {
-	default:
-		dd_dev_err(dd,
-			   "Unknown logical state 0x%x, reporting IB_PORT_DOWN\n",
-			   chip_lstate);
-		/* fall through */
 	case LSTATE_DOWN:
 		return IB_PORT_DOWN;
 	case LSTATE_INIT:
@@ -12723,6 +12851,11 @@ static u32 chip_to_opa_lstate(struct hfi1_devdata *dd, u32 chip_lstate)
 		return IB_PORT_ARMED;
 	case LSTATE_ACTIVE:
 		return IB_PORT_ACTIVE;
+	default:
+		dd_dev_err(dd,
+			   "Unknown logical state 0x%x, reporting IB_PORT_DOWN\n",
+			   chip_lstate);
+		return IB_PORT_DOWN;
 	}
 }
 
@@ -12730,10 +12863,6 @@ u32 chip_to_opa_pstate(struct hfi1_devdata *dd, u32 chip_pstate)
 {
 	/* look at the HFI meta-states only */
 	switch (chip_pstate & 0xf0) {
-	default:
-		dd_dev_err(dd, "Unexpected chip physical state of 0x%x\n",
-			   chip_pstate);
-		/* fall through */
 	case PLS_DISABLED:
 		return IB_PORTPHYSSTATE_DISABLED;
 	case PLS_OFFLINE:
@@ -12746,6 +12875,10 @@ u32 chip_to_opa_pstate(struct hfi1_devdata *dd, u32 chip_pstate)
 		return IB_PORTPHYSSTATE_LINKUP;
 	case PLS_PHYTEST:
 		return IB_PORTPHYSSTATE_PHY_TEST;
+	default:
+		dd_dev_err(dd, "Unexpected chip physical state of 0x%x\n",
+			   chip_pstate);
+		return IB_PORTPHYSSTATE_DISABLED;
 	}
 }
 
@@ -13052,15 +13185,16 @@ static void read_mod_write(struct hfi1_devdata *dd, u16 src, u64 bits,
 {
 	u64 reg;
 	u16 idx = src / BITS_PER_REGISTER;
+	unsigned long flags;
 
-	spin_lock(&dd->irq_src_lock);
+	spin_lock_irqsave(&dd->irq_src_lock, flags);
 	reg = read_csr(dd, CCE_INT_MASK + (8 * idx));
 	if (set)
 		reg |= bits;
 	else
 		reg &= ~bits;
 	write_csr(dd, CCE_INT_MASK + (8 * idx), reg);
-	spin_unlock(&dd->irq_src_lock);
+	spin_unlock_irqrestore(&dd->irq_src_lock, flags);
 }
 
 /**
@@ -13223,17 +13357,15 @@ static int set_up_interrupts(struct hfi1_devdata *dd)
  *                             in array of contexts
  *	freectxts  - number of free user contexts
  *	num_send_contexts - number of PIO send contexts being used
- *	num_vnic_contexts - number of contexts reserved for VNIC
+ *	num_netdev_contexts - number of contexts reserved for netdev
  */
 static int set_up_context_variables(struct hfi1_devdata *dd)
 {
 	unsigned long num_kernel_contexts;
-	u16 num_vnic_contexts = HFI1_NUM_VNIC_CTXT;
-	int total_contexts;
+	u16 num_netdev_contexts;
 	int ret;
 	unsigned ngroups;
 	int rmt_count;
-	int user_rmt_reduced;
 	u32 n_usr_ctxts;
 	u32 send_contexts = chip_send_contexts(dd);
 	u32 rcv_contexts = chip_rcv_contexts(dd);
@@ -13266,13 +13398,6 @@ static int set_up_context_variables(struct hfi1_devdata *dd)
 		num_kernel_contexts = send_contexts - num_vls - 1;
 	}
 
-	/* Accommodate VNIC contexts if possible */
-	if ((num_kernel_contexts + num_vnic_contexts) > rcv_contexts) {
-		dd_dev_err(dd, "No receive contexts available for VNIC\n");
-		num_vnic_contexts = 0;
-	}
-	total_contexts = num_kernel_contexts + num_vnic_contexts;
-
 	/*
 	 * User contexts:
 	 *	- default to 1 user context per real (non-HT) CPU core if
@@ -13285,55 +13410,64 @@ static int set_up_context_variables(struct hfi1_devdata *dd)
 	/*
 	 * Adjust the counts given a global max.
 	 */
-	if (total_contexts + n_usr_ctxts > rcv_contexts) {
+	if (num_kernel_contexts + n_usr_ctxts > rcv_contexts) {
 		dd_dev_err(dd,
-			   "Reducing # user receive contexts to: %d, from %u\n",
-			   rcv_contexts - total_contexts,
+			   "Reducing # user receive contexts to: %u, from %u\n",
+			   (u32)(rcv_contexts - num_kernel_contexts),
 			   n_usr_ctxts);
 		/* recalculate */
-		n_usr_ctxts = rcv_contexts - total_contexts;
+		n_usr_ctxts = rcv_contexts - num_kernel_contexts;
 	}
 
+	num_netdev_contexts =
+		hfi1_num_netdev_contexts(dd, rcv_contexts -
+					 (num_kernel_contexts + n_usr_ctxts),
+					 &node_affinity.real_cpu_mask);
 	/*
-	 * The RMT entries are currently allocated as shown below:
-	 * 1. QOS (0 to 128 entries);
-	 * 2. FECN (num_kernel_context - 1 + num_user_contexts +
-	 *    num_vnic_contexts);
-	 * 3. VNIC (num_vnic_contexts).
-	 * It should be noted that FECN oversubscribe num_vnic_contexts
-	 * entries of RMT because both VNIC and PSM could allocate any receive
-	 * context between dd->first_dyn_alloc_text and dd->num_rcv_contexts,
-	 * and PSM FECN must reserve an RMT entry for each possible PSM receive
-	 * context.
+	 * RMT entries are allocated as follows:
+	 * 1. QOS (0 to 128 entries)
+	 * 2. FECN (num_kernel_context - 1 [a] + num_user_contexts +
+	 *          num_netdev_contexts [b])
+	 * 3. netdev (NUM_NETDEV_MAP_ENTRIES)
+	 *
+	 * Notes:
+	 * [a] Kernel contexts (except control) are included in FECN if kernel
+	 *     TID_RDMA is active.
+	 * [b] Netdev and user contexts are randomly allocated from the same
+	 *     context pool, so FECN must cover all contexts in the pool.
 	 */
-	rmt_count = qos_rmt_entries(dd, NULL, NULL) + (num_vnic_contexts * 2);
-	if (HFI1_CAP_IS_KSET(TID_RDMA))
-		rmt_count += num_kernel_contexts - 1;
-	if (rmt_count + n_usr_ctxts > NUM_MAP_ENTRIES) {
-		user_rmt_reduced = NUM_MAP_ENTRIES - rmt_count;
-		dd_dev_err(dd,
-			   "RMT size is reducing the number of user receive contexts from %u to %d\n",
-			   n_usr_ctxts,
-			   user_rmt_reduced);
-		/* recalculate */
-		n_usr_ctxts = user_rmt_reduced;
+	rmt_count = qos_rmt_entries(num_kernel_contexts - 1, NULL, NULL)
+		    + (HFI1_CAP_IS_KSET(TID_RDMA) ? num_kernel_contexts - 1
+						  : 0)
+		    + n_usr_ctxts
+		    + num_netdev_contexts
+		    + NUM_NETDEV_MAP_ENTRIES;
+	if (rmt_count > NUM_MAP_ENTRIES) {
+		int over = rmt_count - NUM_MAP_ENTRIES;
+		/* try to squish user contexts, minimum of 1 */
+		if (over >= n_usr_ctxts) {
+			dd_dev_err(dd, "RMT overflow: reduce the requested number of contexts\n");
+			return -EINVAL;
+		}
+		dd_dev_err(dd, "RMT overflow: reducing # user contexts from %u to %u\n",
+			   n_usr_ctxts, n_usr_ctxts - over);
+		n_usr_ctxts -= over;
 	}
 
-	total_contexts += n_usr_ctxts;
-
-	/* the first N are kernel contexts, the rest are user/vnic contexts */
-	dd->num_rcv_contexts = total_contexts;
+	/* the first N are kernel contexts, the rest are user/netdev contexts */
+	dd->num_rcv_contexts =
+		num_kernel_contexts + n_usr_ctxts + num_netdev_contexts;
 	dd->n_krcv_queues = num_kernel_contexts;
 	dd->first_dyn_alloc_ctxt = num_kernel_contexts;
-	dd->num_vnic_contexts = num_vnic_contexts;
+	dd->num_netdev_contexts = num_netdev_contexts;
 	dd->num_user_contexts = n_usr_ctxts;
 	dd->freectxts = n_usr_ctxts;
 	dd_dev_info(dd,
-		    "rcv contexts: chip %d, used %d (kernel %d, vnic %u, user %u)\n",
+		    "rcv contexts: chip %d, used %d (kernel %d, netdev %u, user %u)\n",
 		    rcv_contexts,
 		    (int)dd->num_rcv_contexts,
 		    (int)dd->n_krcv_queues,
-		    dd->num_vnic_contexts,
+		    dd->num_netdev_contexts,
 		    dd->num_user_contexts);
 
 	/*
@@ -14012,29 +14146,33 @@ static void init_early_variables(struct hfi1_devdata *dd)
 
 static void init_kdeth_qp(struct hfi1_devdata *dd)
 {
-	/* user changed the KDETH_QP */
-	if (kdeth_qp != 0 && kdeth_qp >= 0xff) {
-		/* out of range or illegal value */
-		dd_dev_err(dd, "Invalid KDETH queue pair prefix, ignoring");
-		kdeth_qp = 0;
-	}
-	if (kdeth_qp == 0)	/* not set, or failed range check */
-		kdeth_qp = DEFAULT_KDETH_QP;
-
 	write_csr(dd, SEND_BTH_QP,
-		  (kdeth_qp & SEND_BTH_QP_KDETH_QP_MASK) <<
+		  (RVT_KDETH_QP_PREFIX & SEND_BTH_QP_KDETH_QP_MASK) <<
 		  SEND_BTH_QP_KDETH_QP_SHIFT);
 
 	write_csr(dd, RCV_BTH_QP,
-		  (kdeth_qp & RCV_BTH_QP_KDETH_QP_MASK) <<
+		  (RVT_KDETH_QP_PREFIX & RCV_BTH_QP_KDETH_QP_MASK) <<
 		  RCV_BTH_QP_KDETH_QP_SHIFT);
 }
 
 /**
- * init_qpmap_table
- * @dd - device data
- * @first_ctxt - first context
- * @last_ctxt - first context
+ * hfi1_get_qp_map - get qp map
+ * @dd: device data
+ * @idx: index to read
+ */
+u8 hfi1_get_qp_map(struct hfi1_devdata *dd, u8 idx)
+{
+	u64 reg = read_csr(dd, RCV_QP_MAP_TABLE + (idx / 8) * 8);
+
+	reg >>= (idx % 8) * 8;
+	return reg;
+}
+
+/**
+ * init_qpmap_table - init qp map
+ * @dd: device data
+ * @first_ctxt: first context
+ * @last_ctxt: first context
  *
  * This return sets the qpn mapping table that
  * is indexed by qpn[8:1].
@@ -14129,6 +14267,12 @@ static void complete_rsm_map_table(struct hfi1_devdata *dd,
 	}
 }
 
+/* Is a receive side mapping rule */
+static bool has_rsm_rule(struct hfi1_devdata *dd, u8 rule_index)
+{
+	return read_csr(dd, RCV_RSM_CFG + (8 * rule_index)) != 0;
+}
+
 /*
  * Add a receive side mapping rule.
  */
@@ -14164,15 +14308,15 @@ static void clear_rsm_rule(struct hfi1_devdata *dd, u8 rule_index)
 }
 
 /* return the number of RSM map table entries that will be used for QOS */
-static int qos_rmt_entries(struct hfi1_devdata *dd, unsigned int *mp,
+static int qos_rmt_entries(unsigned int n_krcv_queues, unsigned int *mp,
 			   unsigned int *np)
 {
 	int i;
 	unsigned int m, n;
-	u8 max_by_vl = 0;
+	uint max_by_vl = 0;
 
 	/* is QOS active at all? */
-	if (dd->n_krcv_queues <= MIN_KERNEL_KCTXTS ||
+	if (n_krcv_queues < MIN_KERNEL_KCTXTS ||
 	    num_vls == 1 ||
 	    krcvqsset <= 1)
 		goto no_qos;
@@ -14209,8 +14353,8 @@ no_qos:
 
 /**
  * init_qos - init RX qos
- * @dd - device data
- * @rmt - RSM map table
+ * @dd: device data
+ * @rmt: RSM map table
  *
  * This routine initializes Rule 0 and the RSM map table to implement
  * quality of service (qos).
@@ -14230,7 +14374,7 @@ static void init_qos(struct hfi1_devdata *dd, struct rsm_map_table *rmt)
 
 	if (!rmt)
 		goto bail;
-	rmt_entries = qos_rmt_entries(dd, &m, &n);
+	rmt_entries = qos_rmt_entries(dd->n_krcv_queues - 1, &m, &n);
 	if (rmt_entries == 0)
 		goto bail;
 	qpns_per_vl = 1 << m;
@@ -14240,7 +14384,7 @@ static void init_qos(struct hfi1_devdata *dd, struct rsm_map_table *rmt)
 	if (rmt->used + rmt_entries >= NUM_MAP_ENTRIES)
 		goto bail;
 
-	/* add qos entries to the the RSM map table */
+	/* add qos entries to the RSM map table */
 	for (i = 0, ctxt = FIRST_KERNEL_KCTXT; i < num_vls; i++) {
 		unsigned tctxt;
 
@@ -14365,80 +14509,141 @@ static void init_fecn_handling(struct hfi1_devdata *dd,
 	rmt->used += total_cnt;
 }
 
-/* Initialize RSM for VNIC */
-void hfi1_init_vnic_rsm(struct hfi1_devdata *dd)
+static inline bool hfi1_is_rmt_full(int start, int spare)
+{
+	return (start + spare) > NUM_MAP_ENTRIES;
+}
+
+static bool hfi1_netdev_update_rmt(struct hfi1_devdata *dd)
 {
 	u8 i, j;
 	u8 ctx_id = 0;
 	u64 reg;
 	u32 regoff;
-	struct rsm_rule_data rrd;
+	int rmt_start = hfi1_netdev_get_free_rmt_idx(dd);
+	int ctxt_count = hfi1_netdev_ctxt_count(dd);
 
-	if (hfi1_vnic_is_rsm_full(dd, NUM_VNIC_MAP_ENTRIES)) {
-		dd_dev_err(dd, "Vnic RSM disabled, rmt entries used = %d\n",
-			   dd->vnic.rmt_start);
-		return;
+	/* We already have contexts mapped in RMT */
+	if (has_rsm_rule(dd, RSM_INS_VNIC) || has_rsm_rule(dd, RSM_INS_AIP)) {
+		dd_dev_info(dd, "Contexts are already mapped in RMT\n");
+		return true;
 	}
 
-	dev_dbg(&(dd)->pcidev->dev, "Vnic rsm start = %d, end %d\n",
-		dd->vnic.rmt_start,
-		dd->vnic.rmt_start + NUM_VNIC_MAP_ENTRIES);
+	if (hfi1_is_rmt_full(rmt_start, NUM_NETDEV_MAP_ENTRIES)) {
+		dd_dev_err(dd, "Not enough RMT entries used = %d\n",
+			   rmt_start);
+		return false;
+	}
+
+	dev_dbg(&(dd)->pcidev->dev, "RMT start = %d, end %d\n",
+		rmt_start,
+		rmt_start + NUM_NETDEV_MAP_ENTRIES);
 
 	/* Update RSM mapping table, 32 regs, 256 entries - 1 ctx per byte */
-	regoff = RCV_RSM_MAP_TABLE + (dd->vnic.rmt_start / 8) * 8;
+	regoff = RCV_RSM_MAP_TABLE + (rmt_start / 8) * 8;
 	reg = read_csr(dd, regoff);
-	for (i = 0; i < NUM_VNIC_MAP_ENTRIES; i++) {
-		/* Update map register with vnic context */
-		j = (dd->vnic.rmt_start + i) % 8;
+	for (i = 0; i < NUM_NETDEV_MAP_ENTRIES; i++) {
+		/* Update map register with netdev context */
+		j = (rmt_start + i) % 8;
 		reg &= ~(0xffllu << (j * 8));
-		reg |= (u64)dd->vnic.ctxt[ctx_id++]->ctxt << (j * 8);
-		/* Wrap up vnic ctx index */
-		ctx_id %= dd->vnic.num_ctxt;
+		reg |= (u64)hfi1_netdev_get_ctxt(dd, ctx_id++)->ctxt << (j * 8);
+		/* Wrap up netdev ctx index */
+		ctx_id %= ctxt_count;
 		/* Write back map register */
-		if (j == 7 || ((i + 1) == NUM_VNIC_MAP_ENTRIES)) {
+		if (j == 7 || ((i + 1) == NUM_NETDEV_MAP_ENTRIES)) {
 			dev_dbg(&(dd)->pcidev->dev,
-				"Vnic rsm map reg[%d] =0x%llx\n",
+				"RMT[%d] =0x%llx\n",
 				regoff - RCV_RSM_MAP_TABLE, reg);
 
 			write_csr(dd, regoff, reg);
 			regoff += 8;
-			if (i < (NUM_VNIC_MAP_ENTRIES - 1))
+			if (i < (NUM_NETDEV_MAP_ENTRIES - 1))
 				reg = read_csr(dd, regoff);
 		}
 	}
 
-	/* Add rule for vnic */
-	rrd.offset = dd->vnic.rmt_start;
-	rrd.pkt_type = 4;
-	/* Match 16B packets */
-	rrd.field1_off = L2_TYPE_MATCH_OFFSET;
-	rrd.mask1 = L2_TYPE_MASK;
-	rrd.value1 = L2_16B_VALUE;
-	/* Match ETH L4 packets */
-	rrd.field2_off = L4_TYPE_MATCH_OFFSET;
-	rrd.mask2 = L4_16B_TYPE_MASK;
-	rrd.value2 = L4_16B_ETH_VALUE;
-	/* Calc context from veswid and entropy */
-	rrd.index1_off = L4_16B_HDR_VESWID_OFFSET;
-	rrd.index1_width = ilog2(NUM_VNIC_MAP_ENTRIES);
-	rrd.index2_off = L2_16B_ENTROPY_OFFSET;
-	rrd.index2_width = ilog2(NUM_VNIC_MAP_ENTRIES);
-	add_rsm_rule(dd, RSM_INS_VNIC, &rrd);
+	return true;
+}
 
-	/* Enable RSM if not already enabled */
+static void hfi1_enable_rsm_rule(struct hfi1_devdata *dd,
+				 int rule, struct rsm_rule_data *rrd)
+{
+	if (!hfi1_netdev_update_rmt(dd)) {
+		dd_dev_err(dd, "Failed to update RMT for RSM%d rule\n", rule);
+		return;
+	}
+
+	add_rsm_rule(dd, rule, rrd);
 	add_rcvctrl(dd, RCV_CTRL_RCV_RSM_ENABLE_SMASK);
+}
+
+void hfi1_init_aip_rsm(struct hfi1_devdata *dd)
+{
+	/*
+	 * go through with the initialisation only if this rule actually doesn't
+	 * exist yet
+	 */
+	if (atomic_fetch_inc(&dd->ipoib_rsm_usr_num) == 0) {
+		int rmt_start = hfi1_netdev_get_free_rmt_idx(dd);
+		struct rsm_rule_data rrd = {
+			.offset = rmt_start,
+			.pkt_type = IB_PACKET_TYPE,
+			.field1_off = LRH_BTH_MATCH_OFFSET,
+			.mask1 = LRH_BTH_MASK,
+			.value1 = LRH_BTH_VALUE,
+			.field2_off = BTH_DESTQP_MATCH_OFFSET,
+			.mask2 = BTH_DESTQP_MASK,
+			.value2 = BTH_DESTQP_VALUE,
+			.index1_off = DETH_AIP_SQPN_SELECT_OFFSET +
+					ilog2(NUM_NETDEV_MAP_ENTRIES),
+			.index1_width = ilog2(NUM_NETDEV_MAP_ENTRIES),
+			.index2_off = DETH_AIP_SQPN_SELECT_OFFSET,
+			.index2_width = ilog2(NUM_NETDEV_MAP_ENTRIES)
+		};
+
+		hfi1_enable_rsm_rule(dd, RSM_INS_AIP, &rrd);
+	}
+}
+
+/* Initialize RSM for VNIC */
+void hfi1_init_vnic_rsm(struct hfi1_devdata *dd)
+{
+	int rmt_start = hfi1_netdev_get_free_rmt_idx(dd);
+	struct rsm_rule_data rrd = {
+		/* Add rule for vnic */
+		.offset = rmt_start,
+		.pkt_type = 4,
+		/* Match 16B packets */
+		.field1_off = L2_TYPE_MATCH_OFFSET,
+		.mask1 = L2_TYPE_MASK,
+		.value1 = L2_16B_VALUE,
+		/* Match ETH L4 packets */
+		.field2_off = L4_TYPE_MATCH_OFFSET,
+		.mask2 = L4_16B_TYPE_MASK,
+		.value2 = L4_16B_ETH_VALUE,
+		/* Calc context from veswid and entropy */
+		.index1_off = L4_16B_HDR_VESWID_OFFSET,
+		.index1_width = ilog2(NUM_NETDEV_MAP_ENTRIES),
+		.index2_off = L2_16B_ENTROPY_OFFSET,
+		.index2_width = ilog2(NUM_NETDEV_MAP_ENTRIES)
+	};
+
+	hfi1_enable_rsm_rule(dd, RSM_INS_VNIC, &rrd);
 }
 
 void hfi1_deinit_vnic_rsm(struct hfi1_devdata *dd)
 {
 	clear_rsm_rule(dd, RSM_INS_VNIC);
-
-	/* Disable RSM if used only by vnic */
-	if (dd->vnic.rmt_start == 0)
-		clear_rcvctrl(dd, RCV_CTRL_RCV_RSM_ENABLE_SMASK);
 }
 
-static void init_rxe(struct hfi1_devdata *dd)
+void hfi1_deinit_aip_rsm(struct hfi1_devdata *dd)
+{
+	/* only actually clear the rule if it's the last user asking to do so */
+	if (atomic_fetch_add_unless(&dd->ipoib_rsm_usr_num, -1, 0) == 1)
+		clear_rsm_rule(dd, RSM_INS_AIP);
+}
+
+static int init_rxe(struct hfi1_devdata *dd)
 {
 	struct rsm_map_table *rmt;
 	u64 val;
@@ -14447,12 +14652,15 @@ static void init_rxe(struct hfi1_devdata *dd)
 	write_csr(dd, RCV_ERR_MASK, ~0ull);
 
 	rmt = alloc_rsm_map_table(dd);
+	if (!rmt)
+		return -ENOMEM;
+
 	/* set up QOS, including the QPN map table */
 	init_qos(dd, rmt);
 	init_fecn_handling(dd, rmt);
 	complete_rsm_map_table(dd, rmt);
-	/* record number of used rsm map entries for vnic */
-	dd->vnic.rmt_start = rmt->used;
+	/* record number of used rsm map entries for netdev */
+	hfi1_netdev_set_free_rmt_idx(dd, rmt->used);
 	kfree(rmt);
 
 	/*
@@ -14473,6 +14681,7 @@ static void init_rxe(struct hfi1_devdata *dd)
 	val |= ((4ull & RCV_BYPASS_HDR_SIZE_MASK) <<
 		RCV_BYPASS_HDR_SIZE_SHIFT);
 	write_csr(dd, RCV_BYPASS, val);
+	return 0;
 }
 
 static void init_other(struct hfi1_devdata *dd)
@@ -14654,7 +14863,7 @@ int hfi1_clear_ctxt_pkey(struct hfi1_devdata *dd, struct hfi1_ctxtdata *ctxt)
 }
 
 /*
- * Start doing the clean up the the chip. Our clean up happens in multiple
+ * Start doing the clean up the chip. Our clean up happens in multiple
  * stages and this is just the first.
  */
 void hfi1_start_cleanup(struct hfi1_devdata *dd)
@@ -14721,7 +14930,7 @@ static int obtain_boardname(struct hfi1_devdata *dd)
 {
 	/* generic board description */
 	const char generic[] =
-		"Intel Omni-Path Host Fabric Interface Adapter 100 Series";
+		"Cornelis Omni-Path Host Fabric Interface Adapter 100 Series";
 	unsigned long size;
 	int ret;
 
@@ -14783,8 +14992,7 @@ err_exit:
 
 /**
  * hfi1_init_dd() - Initialize most of the dd structure.
- * @dev: the pci_dev for hfi1_ib device
- * @ent: pci_device_id struct for this dev
+ * @dd: the dd device
  *
  * This is global, and is called directly at init to set up the
  * chip-specific function pointers for later use.
@@ -15005,12 +15213,20 @@ int hfi1_init_dd(struct hfi1_devdata *dd)
 		 (dd->revision >> CCE_REVISION_SW_SHIFT)
 		    & CCE_REVISION_SW_MASK);
 
+	/* alloc VNIC/AIP rx data */
+	ret = hfi1_alloc_rx(dd);
+	if (ret)
+		goto bail_cleanup;
+
 	ret = set_up_context_variables(dd);
 	if (ret)
 		goto bail_cleanup;
 
 	/* set initial RXE CSRs */
-	init_rxe(dd);
+	ret = init_rxe(dd);
+	if (ret)
+		goto bail_cleanup;
+
 	/* set initial TXE CSRs */
 	init_txe(dd);
 	/* set initial non-RXE, non-TXE CSRs */
@@ -15090,7 +15306,7 @@ int hfi1_init_dd(struct hfi1_devdata *dd)
 	init_completion(&dd->user_comp);
 
 	/* The user refcount starts with one to inidicate an active device */
-	atomic_set(&dd->user_refcount, 1);
+	refcount_set(&dd->user_refcount, 1);
 
 	goto bail;
 
@@ -15102,6 +15318,7 @@ bail_clear_intr:
 	hfi1_comp_vectors_clean_up(dd);
 	msix_clean_up_interrupts(dd);
 bail_cleanup:
+	hfi1_free_rx(dd);
 	hfi1_pcie_ddcleanup(dd);
 bail_free:
 	hfi1_free_devdata(dd);
@@ -15130,10 +15347,11 @@ static u16 delay_cycles(struct hfi1_pportdata *ppd, u32 desired_egress_rate,
 
 /**
  * create_pbc - build a pbc for transmission
+ * @ppd: info of physical Hfi port
  * @flags: special case flags or-ed in built pbc
- * @srate: static rate
+ * @srate_mbs: static rate
  * @vl: vl
- * @dwlen: dword length (header words + data words + pbc words)
+ * @dw_len: dword length (header words + data words + pbc words)
  *
  * Create a PBC with the given flags, rate, VL, and length.
  *

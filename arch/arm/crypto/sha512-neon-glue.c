@@ -1,16 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * sha512-neon-glue.c - accelerated SHA-384/512 for ARM NEON
  *
  * Copyright (C) 2015 Linaro Ltd <ard.biesheuvel@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <crypto/internal/hash.h>
 #include <crypto/internal/simd.h>
-#include <crypto/sha.h>
+#include <crypto/sha2.h>
 #include <crypto/sha512_base.h>
 #include <linux/crypto.h>
 #include <linux/module.h>
@@ -23,8 +20,8 @@
 MODULE_ALIAS_CRYPTO("sha384-neon");
 MODULE_ALIAS_CRYPTO("sha512-neon");
 
-asmlinkage void sha512_block_data_order_neon(u64 *state, u8 const *src,
-					     int blocks);
+asmlinkage void sha512_block_data_order_neon(struct sha512_state *state,
+					     const u8 *src, int blocks);
 
 static int sha512_neon_update(struct shash_desc *desc, const u8 *data,
 			      unsigned int len)
@@ -36,8 +33,7 @@ static int sha512_neon_update(struct shash_desc *desc, const u8 *data,
 		return sha512_arm_update(desc, data, len);
 
 	kernel_neon_begin();
-	sha512_base_do_update(desc, data, len,
-		(sha512_block_fn *)sha512_block_data_order_neon);
+	sha512_base_do_update(desc, data, len, sha512_block_data_order_neon);
 	kernel_neon_end();
 
 	return 0;
@@ -52,9 +48,8 @@ static int sha512_neon_finup(struct shash_desc *desc, const u8 *data,
 	kernel_neon_begin();
 	if (len)
 		sha512_base_do_update(desc, data, len,
-			(sha512_block_fn *)sha512_block_data_order_neon);
-	sha512_base_do_finalize(desc,
-		(sha512_block_fn *)sha512_block_data_order_neon);
+				      sha512_block_data_order_neon);
+	sha512_base_do_finalize(desc, sha512_block_data_order_neon);
 	kernel_neon_end();
 
 	return sha512_base_finish(desc, out);

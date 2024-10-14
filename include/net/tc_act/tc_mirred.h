@@ -8,8 +8,10 @@
 struct tcf_mirred {
 	struct tc_action	common;
 	int			tcfm_eaction;
+	u32                     tcfm_blockid;
 	bool			tcfm_mac_header_xmit;
 	struct net_device __rcu	*tcfm_dev;
+	netdevice_tracker	tcfm_dev_tracker;
 	struct list_head	tcfm_list;
 };
 #define to_mirred(a) ((struct tcf_mirred *)a)
@@ -28,6 +30,24 @@ static inline bool is_tcf_mirred_egress_mirror(const struct tc_action *a)
 #ifdef CONFIG_NET_CLS_ACT
 	if (a->ops && a->ops->id == TCA_ID_MIRRED)
 		return to_mirred(a)->tcfm_eaction == TCA_EGRESS_MIRROR;
+#endif
+	return false;
+}
+
+static inline bool is_tcf_mirred_ingress_redirect(const struct tc_action *a)
+{
+#ifdef CONFIG_NET_CLS_ACT
+	if (a->ops && a->ops->id == TCA_ID_MIRRED)
+		return to_mirred(a)->tcfm_eaction == TCA_INGRESS_REDIR;
+#endif
+	return false;
+}
+
+static inline bool is_tcf_mirred_ingress_mirror(const struct tc_action *a)
+{
+#ifdef CONFIG_NET_CLS_ACT
+	if (a->ops && a->ops->id == TCA_ID_MIRRED)
+		return to_mirred(a)->tcfm_eaction == TCA_INGRESS_MIRROR;
 #endif
 	return false;
 }

@@ -1,49 +1,51 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2018 Facebook
 
-#include <linux/bpf.h>
-#include "bpf_helpers.h"
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
 
 #ifndef PERF_MAX_STACK_DEPTH
 #define PERF_MAX_STACK_DEPTH         127
 #endif
 
-struct bpf_map_def SEC("maps") control_map = {
-	.type = BPF_MAP_TYPE_ARRAY,
-	.key_size = sizeof(__u32),
-	.value_size = sizeof(__u32),
-	.max_entries = 1,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} control_map SEC(".maps");
 
-struct bpf_map_def SEC("maps") stackid_hmap = {
-	.type = BPF_MAP_TYPE_HASH,
-	.key_size = sizeof(__u32),
-	.value_size = sizeof(__u32),
-	.max_entries = 16384,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 16384);
+	__type(key, __u32);
+	__type(value, __u32);
+} stackid_hmap SEC(".maps");
 
-struct bpf_map_def SEC("maps") stackmap = {
-	.type = BPF_MAP_TYPE_STACK_TRACE,
-	.key_size = sizeof(__u32),
-	.value_size = sizeof(__u64) * PERF_MAX_STACK_DEPTH,
-	.max_entries = 16384,
-};
+typedef __u64 stack_trace_t[PERF_MAX_STACK_DEPTH];
 
-struct bpf_map_def SEC("maps") stack_amap = {
-	.type = BPF_MAP_TYPE_ARRAY,
-	.key_size = sizeof(__u32),
-	.value_size = sizeof(__u64) * PERF_MAX_STACK_DEPTH,
-	.max_entries = 16384,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_STACK_TRACE);
+	__uint(max_entries, 16384);
+	__type(key, __u32);
+	__type(value, stack_trace_t);
+} stackmap SEC(".maps");
 
-/* taken from /sys/kernel/debug/tracing/events/sched/sched_switch/format */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 16384);
+	__type(key, __u32);
+	__type(value, stack_trace_t);
+} stack_amap SEC(".maps");
+
+/* taken from /sys/kernel/tracing/events/sched/sched_switch/format */
 struct sched_switch_args {
 	unsigned long long pad;
-	char prev_comm[16];
+	char prev_comm[TASK_COMM_LEN];
 	int prev_pid;
 	int prev_prio;
 	long long prev_state;
-	char next_comm[16];
+	char next_comm[TASK_COMM_LEN];
 	int next_pid;
 	int next_prio;
 };
@@ -72,4 +74,3 @@ int oncpu(struct sched_switch_args *ctx)
 }
 
 char _license[] SEC("license") = "GPL";
-__u32 _version SEC("version") = 1; /* ignored by tracepoints, required by libbpf.a */

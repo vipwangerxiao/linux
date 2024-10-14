@@ -70,7 +70,7 @@ static int rtc_valid_range(struct rtc_device *rtc, struct rtc_time *tm)
 		time64_t time = rtc_tm_to_time64(tm);
 		time64_t range_min = rtc->set_start_time ? rtc->start_secs :
 			rtc->range_min;
-		time64_t range_max = rtc->set_start_time ?
+		timeu64_t range_max = rtc->set_start_time ?
 			(rtc->start_secs + rtc->range_max - rtc->range_min) :
 			rtc->range_max;
 
@@ -125,7 +125,7 @@ EXPORT_SYMBOL_GPL(rtc_read_time);
 
 int rtc_set_time(struct rtc_device *rtc, struct rtc_time *tm)
 {
-	int err;
+	int err, uie;
 
 	err = rtc_valid_tm(tm);
 	if (err != 0)
@@ -136,6 +136,17 @@ int rtc_set_time(struct rtc_device *rtc, struct rtc_time *tm)
 		return err;
 
 	rtc_subtract_offset(rtc, tm);
+
+#ifdef CONFIG_RTC_INTF_DEV_UIE_EMUL
+	uie = rtc->uie_rtctimer.enabled || rtc->uie_irq_active;
+#else
+	uie = rtc->uie_rtctimer.enabled;
+#endif
+	if (uie) {
+		err = rtc_update_irq_enable(rtc, 0);
+		if (err)
+			return err;
+	}
 
 	err = mutex_lock_interruptible(&rtc->ops_lock);
 	if (err)
@@ -153,6 +164,12 @@ int rtc_set_time(struct rtc_device *rtc, struct rtc_time *tm)
 	/* A timer might have just expired */
 	schedule_work(&rtc->irqwork);
 
+	if (uie) {
+		err = rtc_update_irq_enable(rtc, 1);
+		if (err)
+			return err;
+	}
+
 	trace_rtc_set_time(rtc_tm_to_time64(tm), err);
 	return err;
 }
@@ -169,7 +186,7 @@ static int rtc_read_alarm_internal(struct rtc_device *rtc,
 
 	if (!rtc->ops) {
 		err = -ENODEV;
-	} else if (!rtc->ops->read_alarm) {
+	} else if (!test_bit(RTC_FEATURE_ALARM, rtc->features) || !rtc->ops->read_alarm) {
 		err = -EINVAL;
 	} else {
 		alarm->enabled = 0;
@@ -239,7 +256,7 @@ int __rtc_read_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 	 *
 	 * This could all instead be done in the lower level driver,
 	 * but since more than one lower level RTC implementation needs it,
-	 * then it's probably best best to do it here instead of there..
+	 * then it's probably best to do it here instead of there..
 	 */
 
 	/* Get the "before" timestamp */
@@ -257,10 +274,9 @@ int __rtc_read_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 			return err;
 
 		/* full-function RTCs won't have such missing fields */
-		if (rtc_valid_tm(&alarm->time) == 0) {
-			rtc_add_offset(rtc, &alarm->time);
-			return 0;
-		}
+		err = rtc_valid_tm(&alarm->time);
+		if (!err)
+			goto done;
 
 		/* get the "after" timestamp, to detect wrapped fields */
 		err = rtc_read_time(rtc, &now);
@@ -359,9 +375,11 @@ int __rtc_read_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 	err = rtc_valid_tm(&alarm->time);
 
 done:
-	if (err)
+	if (err && alarm->enabled)
 		dev_warn(&rtc->dev, "invalid alarm value: %ptR\n",
 			 &alarm->time);
+	else
+		rtc_add_offset(rtc, &alarm->time);
 
 	return err;
 }
@@ -375,7 +393,7 @@ int rtc_read_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 		return err;
 	if (!rtc->ops) {
 		err = -ENODEV;
-	} else if (!rtc->ops->read_alarm) {
+	} else if (!test_bit(RTC_FEATURE_ALARM, rtc->features)) {
 		err = -EINVAL;
 	} else {
 		memset(alarm, 0, sizeof(struct rtc_wkalrm));
@@ -406,6 +424,7 @@ static int __rtc_set_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 	if (err)
 		return err;
 	now = rtc_tm_to_time64(&tm);
+
 	if (scheduled <= now)
 		return -ETIME;
 	/*
@@ -419,7 +438,7 @@ static int __rtc_set_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 
 	if (!rtc->ops)
 		err = -ENODEV;
-	else if (!rtc->ops->set_alarm)
+	else if (!test_bit(RTC_FEATURE_ALARM, rtc->features))
 		err = -EINVAL;
 	else
 		err = rtc->ops->set_alarm(rtc->dev.parent, alarm);
@@ -430,11 +449,12 @@ static int __rtc_set_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 
 int rtc_set_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 {
+	ktime_t alarm_time;
 	int err;
 
 	if (!rtc->ops)
 		return -ENODEV;
-	else if (!rtc->ops->set_alarm)
+	else if (!test_bit(RTC_FEATURE_ALARM, rtc->features))
 		return -EINVAL;
 
 	err = rtc_valid_tm(&alarm->time);
@@ -451,7 +471,15 @@ int rtc_set_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 	if (rtc->aie_timer.enabled)
 		rtc_timer_remove(rtc, &rtc->aie_timer);
 
-	rtc->aie_timer.node.expires = rtc_tm_to_ktime(alarm->time);
+	alarm_time = rtc_tm_to_ktime(alarm->time);
+	/*
+	 * Round down so we never miss a deadline, checking for past deadline is
+	 * done in __rtc_set_alarm
+	 */
+	if (test_bit(RTC_FEATURE_ALARM_RES_MINUTE, rtc->features))
+		alarm_time = ktime_sub_ns(alarm_time, (u64)alarm->time.tm_sec * NSEC_PER_SEC);
+
+	rtc->aie_timer.node.expires = alarm_time;
 	rtc->aie_timer.period = 0;
 	if (alarm->enabled)
 		err = rtc_timer_enqueue(rtc, &rtc->aie_timer);
@@ -514,7 +542,7 @@ int rtc_alarm_irq_enable(struct rtc_device *rtc, unsigned int enabled)
 		/* nothing */;
 	else if (!rtc->ops)
 		err = -ENODEV;
-	else if (!rtc->ops->alarm_irq_enable)
+	else if (!test_bit(RTC_FEATURE_ALARM, rtc->features) || !rtc->ops->alarm_irq_enable)
 		err = -EINVAL;
 	else
 		err = rtc->ops->alarm_irq_enable(rtc->dev.parent, enabled);
@@ -544,16 +572,23 @@ int rtc_update_irq_enable(struct rtc_device *rtc, unsigned int enabled)
 	if (rtc->uie_rtctimer.enabled == enabled)
 		goto out;
 
-	if (rtc->uie_unsupported) {
-		err = -EINVAL;
-		goto out;
+	if (!test_bit(RTC_FEATURE_UPDATE_INTERRUPT, rtc->features) ||
+	    !test_bit(RTC_FEATURE_ALARM, rtc->features)) {
+		mutex_unlock(&rtc->ops_lock);
+#ifdef CONFIG_RTC_INTF_DEV_UIE_EMUL
+		return rtc_dev_update_irq_enable_emul(rtc, enabled);
+#else
+		return -EINVAL;
+#endif
 	}
 
 	if (enabled) {
 		struct rtc_time tm;
 		ktime_t now, onesec;
 
-		__rtc_read_time(rtc, &tm);
+		err = __rtc_read_time(rtc, &tm);
+		if (err)
+			goto out;
 		onesec = ktime_set(1, 0);
 		now = rtc_tm_to_ktime(tm);
 		rtc->uie_rtctimer.node.expires = ktime_add(now, onesec);
@@ -565,15 +600,7 @@ int rtc_update_irq_enable(struct rtc_device *rtc, unsigned int enabled)
 
 out:
 	mutex_unlock(&rtc->ops_lock);
-#ifdef CONFIG_RTC_INTF_DEV_UIE_EMUL
-	/*
-	 * Enable emulation if the driver returned -EINVAL to signal that it has
-	 * been configured without interrupts or they are not available at the
-	 * moment.
-	 */
-	if (err == -EINVAL)
-		err = rtc_dev_update_irq_enable_emul(rtc, enabled);
-#endif
+
 	return err;
 }
 EXPORT_SYMBOL_GPL(rtc_update_irq_enable);
@@ -581,6 +608,8 @@ EXPORT_SYMBOL_GPL(rtc_update_irq_enable);
 /**
  * rtc_handle_legacy_irq - AIE, UIE and PIE event hook
  * @rtc: pointer to the rtc device
+ * @num: number of occurence of the event
+ * @mode: type of the event, RTC_AF, RTC_UF of RTC_PF
  *
  * This function is called when an AIE, UIE or PIE mode interrupt
  * has occurred (or been emulated).
@@ -633,7 +662,7 @@ enum hrtimer_restart rtc_pie_update_irq(struct hrtimer *timer)
 {
 	struct rtc_device *rtc;
 	ktime_t period;
-	int count;
+	u64 count;
 
 	rtc = container_of(timer, struct rtc_device, pie_timer);
 
@@ -663,21 +692,12 @@ void rtc_update_irq(struct rtc_device *rtc,
 }
 EXPORT_SYMBOL_GPL(rtc_update_irq);
 
-static int __rtc_match(struct device *dev, const void *data)
-{
-	const char *name = data;
-
-	if (strcmp(dev_name(dev), name) == 0)
-		return 1;
-	return 0;
-}
-
 struct rtc_device *rtc_class_open(const char *name)
 {
 	struct device *dev;
 	struct rtc_device *rtc = NULL;
 
-	dev = class_find_device(rtc_class, NULL, name, __rtc_match);
+	dev = class_find_device_by_name(&rtc_class, name);
 	if (dev)
 		rtc = to_rtc_device(dev);
 
@@ -770,8 +790,8 @@ int rtc_irq_set_freq(struct rtc_device *rtc, int freq)
 
 /**
  * rtc_timer_enqueue - Adds a rtc_timer to the rtc_device timerqueue
- * @rtc rtc device
- * @timer timer being added.
+ * @rtc: rtc device
+ * @timer: timer being added.
  *
  * Enqueues a timer onto the rtc devices timerqueue and sets
  * the next alarm event appropriately.
@@ -785,9 +805,13 @@ static int rtc_timer_enqueue(struct rtc_device *rtc, struct rtc_timer *timer)
 	struct timerqueue_node *next = timerqueue_getnext(&rtc->timerqueue);
 	struct rtc_time tm;
 	ktime_t now;
+	int err;
+
+	err = __rtc_read_time(rtc, &tm);
+	if (err)
+		return err;
 
 	timer->enabled = 1;
-	__rtc_read_time(rtc, &tm);
 	now = rtc_tm_to_ktime(tm);
 
 	/* Skip over expired timers */
@@ -801,7 +825,6 @@ static int rtc_timer_enqueue(struct rtc_device *rtc, struct rtc_timer *timer)
 	trace_rtc_timer_enqueue(timer);
 	if (!next || ktime_before(timer->node.expires, next->expires)) {
 		struct rtc_wkalrm alarm;
-		int err;
 
 		alarm.time = rtc_ktime_to_tm(timer->node.expires);
 		alarm.enabled = 1;
@@ -821,7 +844,7 @@ static int rtc_timer_enqueue(struct rtc_device *rtc, struct rtc_timer *timer)
 
 static void rtc_alarm_disable(struct rtc_device *rtc)
 {
-	if (!rtc->ops || !rtc->ops->alarm_irq_enable)
+	if (!rtc->ops || !test_bit(RTC_FEATURE_ALARM, rtc->features) || !rtc->ops->alarm_irq_enable)
 		return;
 
 	rtc->ops->alarm_irq_enable(rtc->dev.parent, false);
@@ -830,8 +853,8 @@ static void rtc_alarm_disable(struct rtc_device *rtc)
 
 /**
  * rtc_timer_remove - Removes a rtc_timer from the rtc_device timerqueue
- * @rtc rtc device
- * @timer timer being removed.
+ * @rtc: rtc device
+ * @timer: timer being removed.
  *
  * Removes a timer onto the rtc devices timerqueue and sets
  * the next alarm event appropriately.
@@ -868,8 +891,7 @@ static void rtc_timer_remove(struct rtc_device *rtc, struct rtc_timer *timer)
 
 /**
  * rtc_timer_do_work - Expires rtc timers
- * @rtc rtc device
- * @timer timer being removed.
+ * @work: work item
  *
  * Expires rtc timers. Reprograms next alarm event if needed.
  * Called via worktask.
@@ -1002,8 +1024,8 @@ void rtc_timer_cancel(struct rtc_device *rtc, struct rtc_timer *timer)
 
 /**
  * rtc_read_offset - Read the amount of rtc offset in parts per billion
- * @ rtc: rtc device to be used
- * @ offset: the offset in parts per billion
+ * @rtc: rtc device to be used
+ * @offset: the offset in parts per billion
  *
  * see below for details.
  *
@@ -1031,8 +1053,8 @@ int rtc_read_offset(struct rtc_device *rtc, long *offset)
 
 /**
  * rtc_set_offset - Adjusts the duration of the average second
- * @ rtc: rtc device to be used
- * @ offset: the offset in parts per billion
+ * @rtc: rtc device to be used
+ * @offset: the offset in parts per billion
  *
  * Some rtc's allow an adjustment to the average duration of a second
  * to compensate for differences in the actual clock rate due to temperature,

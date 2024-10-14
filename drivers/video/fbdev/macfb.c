@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * macfb.c: Generic framebuffer for Macs whose colourmaps/modes we
  * don't know how to set.
@@ -17,10 +18,6 @@
  *
  * The VideoToolbox "Bugs" web page at
  * http://rajsky.psych.nyu.edu/Tips/VideoBugs.html
- *
- * This code is free software.  You may copy, modify, and distribute
- * it subject to the terms and conditions of the GNU General Public
- * License, version 2, or any later version, at your convenience.
  */
 
 #include <linux/module.h>
@@ -342,7 +339,7 @@ static int civic_setpalette(unsigned int regno, unsigned int red,
 {
 	unsigned long flags;
 	int clut_status;
-	
+
 	local_irq_save(flags);
 
 	/* Set the register address */
@@ -442,7 +439,7 @@ static int macfb_setcolreg(unsigned regno, unsigned red, unsigned green,
 	 * (according to the entries in the `var' structure).
 	 * Return non-zero for invalid regno.
 	 */
-	
+
 	if (regno >= fb_info->cmap.len)
 		return 1;
 
@@ -481,7 +478,7 @@ static int macfb_setcolreg(unsigned regno, unsigned red, unsigned green,
 			break;
 		/*
 		 * 24-bit colour almost doesn't exist on 68k Macs --
-		 * http://support.apple.com/kb/TA28634 (Old Article: 10992)
+		 * https://support.apple.com/kb/TA28634 (Old Article: 10992)
 		 */
 		case 24:
 		case 32:
@@ -499,12 +496,10 @@ static int macfb_setcolreg(unsigned regno, unsigned red, unsigned green,
 	return 0;
 }
 
-static struct fb_ops macfb_ops = {
+static const struct fb_ops macfb_ops = {
 	.owner		= THIS_MODULE,
+	FB_DEFAULT_IOMEM_OPS,
 	.fb_setcolreg	= macfb_setcolreg,
-	.fb_fillrect	= cfb_fillrect,
-	.fb_copyarea	= cfb_copyarea,
-	.fb_imageblit	= cfb_imageblit,
 };
 
 static void __init macfb_setup(char *options)
@@ -551,7 +546,7 @@ static int __init macfb_init(void)
 		return -ENODEV;
 	macfb_setup(option);
 
-	if (!MACH_IS_MAC) 
+	if (!MACH_IS_MAC)
 		return -ENODEV;
 
 	if (mac_bi_data.id == MAC_MODEL_Q630 ||
@@ -647,7 +642,7 @@ static int __init macfb_init(void)
 		err = -EINVAL;
 		goto fail_unmap;
 	}
-	
+
 	/*
 	 * We take a wild guess that if the video physical address is
 	 * in nubus slot space, that the nubus card is driving video.
@@ -777,7 +772,7 @@ static int __init macfb_init(void)
 			civic_cmap_regs = ioremap(CIVIC_BASE, 0x1000);
 			break;
 
-		
+
 		/*
 		 * Assorted weirdos
 		 * We think this may be like the LC II
@@ -879,7 +874,6 @@ static int __init macfb_init(void)
 	fb_info.var		= macfb_defined;
 	fb_info.fix		= macfb_fix;
 	fb_info.pseudo_palette	= pseudo_palette;
-	fb_info.flags		= FBINFO_DEFAULT;
 
 	err = fb_alloc_cmap(&fb_info.cmap, video_cmap_len, 0);
 	if (err)

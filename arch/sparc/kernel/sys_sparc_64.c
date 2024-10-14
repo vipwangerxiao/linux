@@ -87,13 +87,13 @@ static inline unsigned long COLOR_ALIGN(unsigned long addr,
 	return base + off;
 }
 
-unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsigned long len, unsigned long pgoff, unsigned long flags)
+unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsigned long len, unsigned long pgoff, unsigned long flags, vm_flags_t vm_flags)
 {
 	struct mm_struct *mm = current->mm;
 	struct vm_area_struct * vma;
 	unsigned long task_size = TASK_SIZE;
 	int do_color_align;
-	struct vm_unmapped_area_info info;
+	struct vm_unmapped_area_info info = {};
 
 	if (flags & MAP_FIXED) {
 		/* We do not accept a shared mapping if it would violate
@@ -126,7 +126,6 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
 			return addr;
 	}
 
-	info.flags = 0;
 	info.length = len;
 	info.low_limit = TASK_UNMAPPED_BASE;
 	info.high_limit = min(task_size, VA_EXCLUDE_START);
@@ -147,14 +146,14 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr, unsi
 unsigned long
 arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
 			  const unsigned long len, const unsigned long pgoff,
-			  const unsigned long flags)
+			  const unsigned long flags, vm_flags_t vm_flags)
 {
 	struct vm_area_struct *vma;
 	struct mm_struct *mm = current->mm;
 	unsigned long task_size = STACK_TOP32;
 	unsigned long addr = addr0;
 	int do_color_align;
-	struct vm_unmapped_area_info info;
+	struct vm_unmapped_area_info info = {};
 
 	/* This should only ever run for 32-bit processes.  */
 	BUG_ON(!test_thread_flag(TIF_32BIT));
@@ -218,14 +217,10 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
 unsigned long get_fb_unmapped_area(struct file *filp, unsigned long orig_addr, unsigned long len, unsigned long pgoff, unsigned long flags)
 {
 	unsigned long align_goal, addr = -ENOMEM;
-	unsigned long (*get_area)(struct file *, unsigned long,
-				  unsigned long, unsigned long, unsigned long);
-
-	get_area = current->mm->get_unmapped_area;
 
 	if (flags & MAP_FIXED) {
 		/* Ok, don't mess with it. */
-		return get_area(NULL, orig_addr, len, pgoff, flags);
+		return mm_get_unmapped_area(current->mm, NULL, orig_addr, len, pgoff, flags);
 	}
 	flags &= ~MAP_SHARED;
 
@@ -238,7 +233,8 @@ unsigned long get_fb_unmapped_area(struct file *filp, unsigned long orig_addr, u
 		align_goal = (64UL * 1024);
 
 	do {
-		addr = get_area(NULL, orig_addr, len + (align_goal - PAGE_SIZE), pgoff, flags);
+		addr = mm_get_unmapped_area(current->mm, NULL, orig_addr,
+					    len + (align_goal - PAGE_SIZE), pgoff, flags);
 		if (!(addr & ~PAGE_MASK)) {
 			addr = (addr + (align_goal - 1UL)) & ~(align_goal - 1UL);
 			break;
@@ -256,7 +252,7 @@ unsigned long get_fb_unmapped_area(struct file *filp, unsigned long orig_addr, u
 	 * be obtained.
 	 */
 	if (addr & ~PAGE_MASK)
-		addr = get_area(NULL, orig_addr, len, pgoff, flags);
+		addr = mm_get_unmapped_area(current->mm, NULL, orig_addr, len, pgoff, flags);
 
 	return addr;
 }
@@ -292,7 +288,7 @@ void arch_pick_mmap_layout(struct mm_struct *mm, struct rlimit *rlim_stack)
 	    gap == RLIM_INFINITY ||
 	    sysctl_legacy_va_layout) {
 		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
-		mm->get_unmapped_area = arch_get_unmapped_area;
+		clear_bit(MMF_TOPDOWN, &mm->flags);
 	} else {
 		/* We know it's 32-bit */
 		unsigned long task_size = STACK_TOP32;
@@ -303,7 +299,7 @@ void arch_pick_mmap_layout(struct mm_struct *mm, struct rlimit *rlim_stack)
 			gap = (task_size / 6 * 5);
 
 		mm->mmap_base = PAGE_ALIGN(task_size - gap - random_factor);
-		mm->get_unmapped_area = arch_get_unmapped_area_topdown;
+		set_bit(MMF_TOPDOWN, &mm->flags);
 	}
 }
 
@@ -336,25 +332,28 @@ SYSCALL_DEFINE6(sparc_ipc, unsigned int, call, int, first, unsigned long, second
 {
 	long err;
 
+	if (!IS_ENABLED(CONFIG_SYSVIPC))
+		return -ENOSYS;
+
 	/* No need for backward compatibility. We can start fresh... */
 	if (call <= SEMTIMEDOP) {
 		switch (call) {
 		case SEMOP:
-			err = sys_semtimedop(first, ptr,
-					     (unsigned int)second, NULL);
+			err = ksys_semtimedop(first, ptr,
+					      (unsigned int)second, NULL);
 			goto out;
 		case SEMTIMEDOP:
-			err = sys_semtimedop(first, ptr, (unsigned int)second,
+			err = ksys_semtimedop(first, ptr, (unsigned int)second,
 				(const struct __kernel_timespec __user *)
-					     (unsigned long) fifth);
+					      (unsigned long) fifth);
 			goto out;
 		case SEMGET:
-			err = sys_semget(first, (int)second, (int)third);
+			err = ksys_semget(first, (int)second, (int)third);
 			goto out;
 		case SEMCTL: {
-			err = sys_semctl(first, second,
-					 (int)third | IPC_64,
-					 (unsigned long) ptr);
+			err = ksys_old_semctl(first, second,
+					      (int)third | IPC_64,
+					      (unsigned long) ptr);
 			goto out;
 		}
 		default:
@@ -365,18 +364,18 @@ SYSCALL_DEFINE6(sparc_ipc, unsigned int, call, int, first, unsigned long, second
 	if (call <= MSGCTL) {
 		switch (call) {
 		case MSGSND:
-			err = sys_msgsnd(first, ptr, (size_t)second,
+			err = ksys_msgsnd(first, ptr, (size_t)second,
 					 (int)third);
 			goto out;
 		case MSGRCV:
-			err = sys_msgrcv(first, ptr, (size_t)second, fifth,
+			err = ksys_msgrcv(first, ptr, (size_t)second, fifth,
 					 (int)third);
 			goto out;
 		case MSGGET:
-			err = sys_msgget((key_t)first, (int)second);
+			err = ksys_msgget((key_t)first, (int)second);
 			goto out;
 		case MSGCTL:
-			err = sys_msgctl(first, (int)second | IPC_64, ptr);
+			err = ksys_old_msgctl(first, (int)second | IPC_64, ptr);
 			goto out;
 		default:
 			err = -ENOSYS;
@@ -396,13 +395,13 @@ SYSCALL_DEFINE6(sparc_ipc, unsigned int, call, int, first, unsigned long, second
 			goto out;
 		}
 		case SHMDT:
-			err = sys_shmdt(ptr);
+			err = ksys_shmdt(ptr);
 			goto out;
 		case SHMGET:
-			err = sys_shmget(first, (size_t)second, (int)third);
+			err = ksys_shmget(first, (size_t)second, (int)third);
 			goto out;
 		case SHMCTL:
-			err = sys_shmctl(first, (int)second | IPC_64, ptr);
+			err = ksys_old_shmctl(first, (int)second | IPC_64, ptr);
 			goto out;
 		default:
 			err = -ENOSYS;
@@ -511,7 +510,7 @@ asmlinkage void sparc_breakpoint(struct pt_regs *regs)
 #ifdef DEBUG_SPARC_BREAKPOINT
         printk ("TRAP: Entering kernel PC=%lx, nPC=%lx\n", regs->tpc, regs->tnpc);
 #endif
-	force_sig_fault(SIGTRAP, TRAP_BRKPT, (void __user *)regs->tpc, 0, current);
+	force_sig_fault(SIGTRAP, TRAP_BRKPT, (void __user *)regs->tpc);
 #ifdef DEBUG_SPARC_BREAKPOINT
 	printk ("TRAP: Returning to space: PC=%lx nPC=%lx\n", regs->tpc, regs->tnpc);
 #endif
@@ -545,34 +544,35 @@ out_unlock:
 	return err;
 }
 
-SYSCALL_DEFINE1(sparc_adjtimex, struct timex __user *, txc_p)
+SYSCALL_DEFINE1(sparc_adjtimex, struct __kernel_timex __user *, txc_p)
 {
-	struct timex txc;		/* Local copy of parameter */
-	struct __kernel_timex *kt = (void *)&txc;
+	struct __kernel_timex txc;
+	struct __kernel_old_timeval *tv = (void *)&txc.time;
 	int ret;
 
 	/* Copy the user data space into the kernel copy
 	 * structure. But bear in mind that the structures
 	 * may change
 	 */
-	if (copy_from_user(&txc, txc_p, sizeof(struct timex)))
+	if (copy_from_user(&txc, txc_p, sizeof(txc)))
 		return -EFAULT;
 
 	/*
 	 * override for sparc64 specific timeval type: tv_usec
 	 * is 32 bit wide instead of 64-bit in __kernel_timex
 	 */
-	kt->time.tv_usec = txc.time.tv_usec;
-	ret = do_adjtimex(kt);
-	txc.time.tv_usec = kt->time.tv_usec;
+	txc.time.tv_usec = tv->tv_usec;
+	ret = do_adjtimex(&txc);
+	tv->tv_usec = txc.time.tv_usec;
 
-	return copy_to_user(txc_p, &txc, sizeof(struct timex)) ? -EFAULT : ret;
+	return copy_to_user(txc_p, &txc, sizeof(txc)) ? -EFAULT : ret;
 }
 
-SYSCALL_DEFINE2(sparc_clock_adjtime, const clockid_t, which_clock,struct timex __user *, txc_p)
+SYSCALL_DEFINE2(sparc_clock_adjtime, const clockid_t, which_clock,
+		struct __kernel_timex __user *, txc_p)
 {
-	struct timex txc;		/* Local copy of parameter */
-	struct __kernel_timex *kt = (void *)&txc;
+	struct __kernel_timex txc;
+	struct __kernel_old_timeval *tv = (void *)&txc.time;
 	int ret;
 
 	if (!IS_ENABLED(CONFIG_POSIX_TIMERS)) {
@@ -587,18 +587,18 @@ SYSCALL_DEFINE2(sparc_clock_adjtime, const clockid_t, which_clock,struct timex _
 	 * structure. But bear in mind that the structures
 	 * may change
 	 */
-	if (copy_from_user(&txc, txc_p, sizeof(struct timex)))
+	if (copy_from_user(&txc, txc_p, sizeof(txc)))
 		return -EFAULT;
 
 	/*
 	 * override for sparc64 specific timeval type: tv_usec
 	 * is 32 bit wide instead of 64-bit in __kernel_timex
 	 */
-	kt->time.tv_usec = txc.time.tv_usec;
-	ret = do_clock_adjtime(which_clock, kt);
-	txc.time.tv_usec = kt->time.tv_usec;
+	txc.time.tv_usec = tv->tv_usec;
+	ret = do_clock_adjtime(which_clock, &txc);
+	tv->tv_usec = txc.time.tv_usec;
 
-	return copy_to_user(txc_p, &txc, sizeof(struct timex)) ? -EFAULT : ret;
+	return copy_to_user(txc_p, &txc, sizeof(txc)) ? -EFAULT : ret;
 }
 
 SYSCALL_DEFINE5(utrap_install, utrap_entry_t, type,

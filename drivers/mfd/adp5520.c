@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Base driver for Analog Devices ADP5520/ADP5501 MFD PMICs
  * LCD Backlight: drivers/video/backlight/adp5520_bl
@@ -15,8 +16,6 @@
  *
  * Copyright (C) 2006-2008 Marvell International Ltd.
  *	Eric Miao <eric.miao@marvell.com>
- *
- * Licensed under the GPL-2 or later.
  */
 
 #include <linux/kernel.h>
@@ -205,9 +204,9 @@ static int adp5520_remove_subdevs(struct adp5520_chip *chip)
 	return device_for_each_child(chip->dev, NULL, __remove_subdev);
 }
 
-static int adp5520_probe(struct i2c_client *client,
-					const struct i2c_device_id *id)
+static int adp5520_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct adp5520_platform_data *pdata = dev_get_platdata(&client->dev);
 	struct platform_device *pdev;
 	struct adp5520_chip *chip;
@@ -306,7 +305,6 @@ out_free_irq:
 	return ret;
 }
 
-#ifdef CONFIG_PM_SLEEP
 static int adp5520_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
@@ -327,9 +325,8 @@ static int adp5520_resume(struct device *dev)
 	adp5520_write(chip->dev, ADP5520_MODE_STATUS, chip->mode);
 	return 0;
 }
-#endif
 
-static SIMPLE_DEV_PM_OPS(adp5520_pm, adp5520_suspend, adp5520_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(adp5520_pm, adp5520_suspend, adp5520_resume);
 
 static const struct i2c_device_id adp5520_id[] = {
 	{ "pmic-adp5520", ID_ADP5520 },
@@ -340,7 +337,7 @@ static const struct i2c_device_id adp5520_id[] = {
 static struct i2c_driver adp5520_driver = {
 	.driver = {
 		.name			= "adp5520",
-		.pm			= &adp5520_pm,
+		.pm			= pm_sleep_ptr(&adp5520_pm),
 		.suppress_bind_attrs	= true,
 	},
 	.probe		= adp5520_probe,

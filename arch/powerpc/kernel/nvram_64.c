@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  c 2001 PPC 64 Team, IBM Corp
- *
- *      This program is free software; you can redistribute it and/or
- *      modify it under the terms of the GNU General Public License
- *      as published by the Free Software Foundation; either version
- *      2 of the License, or (at your option) any later version.
  *
  * /dev/nvram driver for PPC64
  */
@@ -23,9 +19,9 @@
 #include <linux/pstore.h>
 #include <linux/zlib.h>
 #include <linux/uaccess.h>
+#include <linux/of.h>
 #include <asm/nvram.h>
 #include <asm/rtas.h>
-#include <asm/prom.h>
 #include <asm/machdep.h>
 
 #undef DEBUG_NVRAM
@@ -77,7 +73,7 @@ static const char *nvram_os_partitions[] = {
 };
 
 static void oops_to_nvram(struct kmsg_dumper *dumper,
-			  enum kmsg_dump_reason reason);
+			  struct kmsg_dump_detail *detail);
 
 static struct kmsg_dumper nvram_kmsg_dumper = {
 	.dump = oops_to_nvram
@@ -544,7 +540,7 @@ static struct pstore_info nvram_pstore_info = {
 	.write = nvram_pstore_write,
 };
 
-static int nvram_pstore_init(void)
+static int __init nvram_pstore_init(void)
 {
 	int rc = 0;
 
@@ -566,7 +562,7 @@ static int nvram_pstore_init(void)
 	return rc;
 }
 #else
-static int nvram_pstore_init(void)
+static int __init nvram_pstore_init(void)
 {
 	return -1;
 }
@@ -647,10 +643,11 @@ void __init nvram_init_oops_partition(int rtas_partition_exists)
  * partition.  If that's too much, go back and capture uncompressed text.
  */
 static void oops_to_nvram(struct kmsg_dumper *dumper,
-			  enum kmsg_dump_reason reason)
+			  struct kmsg_dump_detail *detail)
 {
 	struct oops_log_info *oops_hdr = (struct oops_log_info *)oops_buf;
 	static unsigned int oops_count = 0;
+	static struct kmsg_dump_iter iter;
 	static bool panicking = false;
 	static DEFINE_SPINLOCK(lock);
 	unsigned long flags;
@@ -658,10 +655,8 @@ static void oops_to_nvram(struct kmsg_dumper *dumper,
 	unsigned int err_type = ERR_TYPE_KERNEL_PANIC_GZ;
 	int rc = -1;
 
-	switch (reason) {
-	case KMSG_DUMP_RESTART:
-	case KMSG_DUMP_HALT:
-	case KMSG_DUMP_POWEROFF:
+	switch (detail->reason) {
+	case KMSG_DUMP_SHUTDOWN:
 		/* These are almost always orderly shutdowns. */
 		return;
 	case KMSG_DUMP_OOPS:
@@ -676,7 +671,7 @@ static void oops_to_nvram(struct kmsg_dumper *dumper,
 		break;
 	default:
 		pr_err("%s: ignoring unrecognized KMSG_DUMP_* reason %d\n",
-		       __func__, (int) reason);
+		       __func__, (int) detail->reason);
 		return;
 	}
 
@@ -687,13 +682,14 @@ static void oops_to_nvram(struct kmsg_dumper *dumper,
 		return;
 
 	if (big_oops_buf) {
-		kmsg_dump_get_buffer(dumper, false,
+		kmsg_dump_rewind(&iter);
+		kmsg_dump_get_buffer(&iter, false,
 				     big_oops_buf, big_oops_buf_sz, &text_len);
 		rc = zip_oops(text_len);
 	}
 	if (rc != 0) {
-		kmsg_dump_rewind(dumper);
-		kmsg_dump_get_buffer(dumper, false,
+		kmsg_dump_rewind(&iter);
+		kmsg_dump_get_buffer(&iter, false,
 				     oops_data, oops_data_sz, &text_len);
 		err_type = ERR_TYPE_KERNEL_PANIC;
 		oops_hdr->version = cpu_to_be16(OOPS_HDR_VERSION);
@@ -759,7 +755,7 @@ static unsigned char __init nvram_checksum(struct nvram_header *p)
  * Per the criteria passed via nvram_remove_partition(), should this
  * partition be removed?  1=remove, 0=keep
  */
-static int nvram_can_remove_partition(struct nvram_partition *part,
+static int __init nvram_can_remove_partition(struct nvram_partition *part,
 		const char *name, int sig, const char *exceptions[])
 {
 	if (part->header.signature != sig)
@@ -858,8 +854,8 @@ loff_t __init nvram_create_partition(const char *name, int sig,
 	BUILD_BUG_ON(NVRAM_BLOCK_LEN != 16);
 
 	/* Convert sizes from bytes to blocks */
-	req_size = _ALIGN_UP(req_size, NVRAM_BLOCK_LEN) / NVRAM_BLOCK_LEN;
-	min_size = _ALIGN_UP(min_size, NVRAM_BLOCK_LEN) / NVRAM_BLOCK_LEN;
+	req_size = ALIGN(req_size, NVRAM_BLOCK_LEN) / NVRAM_BLOCK_LEN;
+	min_size = ALIGN(min_size, NVRAM_BLOCK_LEN) / NVRAM_BLOCK_LEN;
 
 	/* If no minimum size specified, make it the same as the
 	 * requested size

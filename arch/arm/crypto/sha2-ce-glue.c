@@ -1,16 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * sha2-ce-glue.c - SHA-224/SHA-256 using ARMv8 Crypto Extensions
  *
  * Copyright (C) 2015 Linaro Ltd <ard.biesheuvel@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <crypto/internal/hash.h>
 #include <crypto/internal/simd.h>
-#include <crypto/sha.h>
+#include <crypto/sha2.h>
 #include <crypto/sha256_base.h>
 #include <linux/cpufeature.h>
 #include <linux/crypto.h>
@@ -19,7 +16,7 @@
 #include <asm/hwcap.h>
 #include <asm/simd.h>
 #include <asm/neon.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 #include "sha256_glue.h"
 

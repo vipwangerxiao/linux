@@ -9,8 +9,7 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/device.h>
-#include <linux/of_device.h>
-#include <linux/of_platform.h>
+#include <linux/of.h>
 
 #include <sound/soc.h>
 
@@ -23,20 +22,26 @@ struct pcm030_audio_data {
 	struct platform_device *codec_device;
 };
 
+SND_SOC_DAILINK_DEFS(analog,
+	DAILINK_COMP_ARRAY(COMP_CPU("mpc5200-psc-ac97.0")),
+	DAILINK_COMP_ARRAY(COMP_CODEC("wm9712-codec", "wm9712-hifi")),
+	DAILINK_COMP_ARRAY(COMP_EMPTY()));
+
+SND_SOC_DAILINK_DEFS(iec958,
+	DAILINK_COMP_ARRAY(COMP_CPU("mpc5200-psc-ac97.1")),
+	DAILINK_COMP_ARRAY(COMP_CODEC("wm9712-codec", "wm9712-aux")),
+	DAILINK_COMP_ARRAY(COMP_EMPTY()));
+
 static struct snd_soc_dai_link pcm030_fabric_dai[] = {
 {
 	.name = "AC97.0",
 	.stream_name = "AC97 Analog",
-	.codec_dai_name = "wm9712-hifi",
-	.cpu_dai_name = "mpc5200-psc-ac97.0",
-	.codec_name = "wm9712-codec",
+	SND_SOC_DAILINK_REG(analog),
 },
 {
 	.name = "AC97.1",
 	.stream_name = "AC97 IEC958",
-	.codec_dai_name = "wm9712-aux",
-	.cpu_dai_name = "mpc5200-psc-ac97.1",
-	.codec_name = "wm9712-codec",
+	SND_SOC_DAILINK_REG(iec958),
 },
 };
 
@@ -76,7 +81,7 @@ static int pcm030_fabric_probe(struct platform_device *op)
 	}
 
 	for_each_card_prelinks(card, i, dai_link)
-		dai_link->platform_of_node = platform_np;
+		dai_link->platforms->of_node = platform_np;
 
 	ret = request_module("snd-soc-wm9712");
 	if (ret)
@@ -87,27 +92,28 @@ static int pcm030_fabric_probe(struct platform_device *op)
 		dev_err(&op->dev, "platform_device_alloc() failed\n");
 
 	ret = platform_device_add(pdata->codec_device);
-	if (ret)
+	if (ret) {
 		dev_err(&op->dev, "platform_device_add() failed: %d\n", ret);
+		platform_device_put(pdata->codec_device);
+	}
 
 	ret = snd_soc_register_card(card);
-	if (ret)
+	if (ret) {
 		dev_err(&op->dev, "snd_soc_register_card() failed: %d\n", ret);
+		platform_device_unregister(pdata->codec_device);
+	}
 
 	platform_set_drvdata(op, pdata);
-
 	return ret;
+
 }
 
-static int pcm030_fabric_remove(struct platform_device *op)
+static void pcm030_fabric_remove(struct platform_device *op)
 {
 	struct pcm030_audio_data *pdata = platform_get_drvdata(op);
-	int ret;
 
-	ret = snd_soc_unregister_card(pdata->card);
+	snd_soc_unregister_card(pdata->card);
 	platform_device_unregister(pdata->codec_device);
-
-	return ret;
 }
 
 static const struct of_device_id pcm030_audio_match[] = {

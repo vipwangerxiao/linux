@@ -25,11 +25,8 @@
 #include <linux/workqueue.h>
 #include <linux/atomic.h>
 #include <linux/pm_runtime.h>
-
+#include <linux/greybus.h>
 #include <asm/div64.h>
-
-#include "greybus.h"
-#include "connection.h"
 
 #define NSEC_PER_DAY 86400000000000ULL
 
@@ -103,8 +100,8 @@ struct gb_loopback {
 
 static struct class loopback_class = {
 	.name		= "gb_loopback",
-	.owner		= THIS_MODULE,
 };
+
 static DEFINE_IDA(loopback_ida);
 
 /* Min/max values in jiffies */
@@ -138,7 +135,7 @@ static ssize_t name##_##field##_show(struct device *dev,	\
 			    char *buf)					\
 {									\
 	struct gb_loopback *gb = dev_get_drvdata(dev);			\
-	/* Report 0 for min and max if no transfer successed */		\
+	/* Report 0 for min and max if no transfer succeeded */		\
 	if (!gb->requests_completed)					\
 		return sprintf(buf, "0\n");				\
 	return sprintf(buf, "%" #type "\n", gb->name.field);		\
@@ -873,7 +870,7 @@ static int gb_loopback_fn(void *data)
 		if (gb->send_count == gb->iteration_max) {
 			mutex_unlock(&gb->mutex);
 
-			/* Wait for synchronous and asynchronus completion */
+			/* Wait for synchronous and asynchronous completion */
 			gb_loopback_async_wait_all(gb);
 
 			/* Mark complete unless user-space has poked us */
@@ -882,7 +879,7 @@ static int gb_loopback_fn(void *data)
 				gb->type = 0;
 				gb->send_count = 0;
 				sysfs_notify(&gb->dev->kobj,  NULL,
-						"iteration_count");
+					     "iteration_count");
 				dev_dbg(&bundle->dev, "load test complete\n");
 			} else {
 				dev_dbg(&bundle->dev,
@@ -1032,7 +1029,7 @@ static int gb_loopback_probe(struct gb_bundle *bundle,
 	gb->file = debugfs_create_file(name, S_IFREG | 0444, gb_dev.root, gb,
 				       &gb_loopback_dbgfs_latency_fops);
 
-	gb->id = ida_simple_get(&loopback_ida, 0, 0, GFP_KERNEL);
+	gb->id = ida_alloc(&loopback_ida, GFP_KERNEL);
 	if (gb->id < 0) {
 		retval = gb->id;
 		goto out_debugfs_remove;
@@ -1054,7 +1051,7 @@ static int gb_loopback_probe(struct gb_bundle *bundle,
 
 	/* Allocate kfifo */
 	if (kfifo_alloc(&gb->kfifo_lat, kfifo_depth * sizeof(u32),
-			  GFP_KERNEL)) {
+			GFP_KERNEL)) {
 		retval = -ENOMEM;
 		goto out_conn;
 	}
@@ -1083,7 +1080,7 @@ out_conn:
 out_connection_disable:
 	gb_connection_disable(connection);
 out_ida_remove:
-	ida_simple_remove(&loopback_ida, gb->id);
+	ida_free(&loopback_ida, gb->id);
 out_debugfs_remove:
 	debugfs_remove(gb->file);
 out_connection_destroy:
@@ -1125,7 +1122,7 @@ static void gb_loopback_disconnect(struct gb_bundle *bundle)
 	spin_unlock_irqrestore(&gb_dev.lock, flags);
 
 	device_unregister(gb->dev);
-	ida_simple_remove(&loopback_ida, gb->id);
+	ida_free(&loopback_ida, gb->id);
 
 	gb_connection_destroy(gb->connection);
 	kfree(gb);
@@ -1178,4 +1175,5 @@ static void __exit loopback_exit(void)
 }
 module_exit(loopback_exit);
 
+MODULE_DESCRIPTION("Loopback bridge driver for the Greybus loopback module");
 MODULE_LICENSE("GPL v2");

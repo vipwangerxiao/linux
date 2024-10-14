@@ -1,9 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-# ifdef CONFIG_SUPERH32
-#  include <asm/unistd_32.h>
-# else
-#  include <asm/unistd_64.h>
-# endif
+#include <asm/unistd_32.h>
 
 #define NR_syscalls	__NR_syscalls
 
@@ -31,5 +27,7 @@
 # define __ARCH_WANT_SYS_FORK
 # define __ARCH_WANT_SYS_VFORK
 # define __ARCH_WANT_SYS_CLONE
+
+#define __ARCH_BROKEN_SYS_CLONE3
 
 #include <uapi/asm/unistd.h>

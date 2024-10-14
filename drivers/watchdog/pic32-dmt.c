@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * PIC32 deadman timer driver
  *
  * Purna Chandra Mandal <purna.mandal@microchip.com>
  * Copyright (c) 2016, Microchip Technology Inc.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 #include <linux/clk.h>
 #include <linux/device.h>
@@ -16,7 +12,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm.h>
 #include <linux/watchdog.h>
@@ -168,11 +163,6 @@ static struct watchdog_device pic32_dmt_wdd = {
 	.ops		= &pic32_dmt_fops,
 };
 
-static void pic32_clk_disable_unprepare(void *data)
-{
-	clk_disable_unprepare(data);
-}
-
 static int pic32_dmt_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -188,19 +178,11 @@ static int pic32_dmt_probe(struct platform_device *pdev)
 	if (IS_ERR(dmt->regs))
 		return PTR_ERR(dmt->regs);
 
-	dmt->clk = devm_clk_get(dev, NULL);
+	dmt->clk = devm_clk_get_enabled(dev, NULL);
 	if (IS_ERR(dmt->clk)) {
 		dev_err(dev, "clk not found\n");
 		return PTR_ERR(dmt->clk);
 	}
-
-	ret = clk_prepare_enable(dmt->clk);
-	if (ret)
-		return ret;
-	ret = devm_add_action_or_reset(dev, pic32_clk_disable_unprepare,
-				       dmt->clk);
-	if (ret)
-		return ret;
 
 	wdd->timeout = pic32_dmt_get_timeout_secs(dmt);
 	if (!wdd->timeout) {
@@ -216,10 +198,8 @@ static int pic32_dmt_probe(struct platform_device *pdev)
 	watchdog_set_drvdata(wdd, dmt);
 
 	ret = devm_watchdog_register_device(dev, wdd);
-	if (ret) {
-		dev_err(dev, "watchdog register failed, err %d\n", ret);
+	if (ret)
 		return ret;
-	}
 
 	platform_set_drvdata(pdev, wdd);
 	return 0;

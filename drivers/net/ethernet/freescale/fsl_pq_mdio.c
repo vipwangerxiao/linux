@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Freescale PowerQUICC Ethernet Driver -- MIIM bus implementation
  * Provides Bus interface for MIIM regs
@@ -8,24 +9,20 @@
  * Copyright 2002-2004, 2008-2009 Freescale Semiconductor, Inc.
  *
  * Based on gianfar_mii.c and ucc_geth_mii.c (Li Yang, Kim Phillips)
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
- *
  */
 
 #include <linux/kernel.h>
+#include <linux/platform_device.h>
 #include <linux/string.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/mii.h>
+#include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_mdio.h>
-#include <linux/of_device.h>
+#include <linux/property.h>
 
 #include <asm/io.h>
 #if IS_ENABLED(CONFIG_UCC_GETH)
@@ -411,8 +408,6 @@ static void set_tbipa(const u32 tbipa_val, struct platform_device *pdev,
 
 static int fsl_pq_mdio_probe(struct platform_device *pdev)
 {
-	const struct of_device_id *id =
-		of_match_device(fsl_pq_mdio_match, &pdev->dev);
 	const struct fsl_pq_mdio_data *data;
 	struct device_node *np = pdev->dev.of_node;
 	struct resource res;
@@ -421,21 +416,18 @@ static int fsl_pq_mdio_probe(struct platform_device *pdev)
 	struct mii_bus *new_bus;
 	int err;
 
-	if (!id) {
+	data = device_get_match_data(&pdev->dev);
+	if (!data) {
 		dev_err(&pdev->dev, "Failed to match device\n");
 		return -ENODEV;
 	}
-
-	data = id->data;
-
-	dev_dbg(&pdev->dev, "found %s compatible node\n", id->compatible);
 
 	new_bus = mdiobus_alloc_size(sizeof(*priv));
 	if (!new_bus)
 		return -ENOMEM;
 
 	priv = new_bus->priv;
-	new_bus->name = "Freescale PowerQUICC MII Bus",
+	new_bus->name = "Freescale PowerQUICC MII Bus";
 	new_bus->read = &fsl_pq_mdio_read;
 	new_bus->write = &fsl_pq_mdio_write;
 	new_bus->reset = &fsl_pq_mdio_reset;
@@ -516,7 +508,7 @@ error:
 }
 
 
-static int fsl_pq_mdio_remove(struct platform_device *pdev)
+static void fsl_pq_mdio_remove(struct platform_device *pdev)
 {
 	struct device *device = &pdev->dev;
 	struct mii_bus *bus = dev_get_drvdata(device);
@@ -526,8 +518,6 @@ static int fsl_pq_mdio_remove(struct platform_device *pdev)
 
 	iounmap(priv->map);
 	mdiobus_free(bus);
-
-	return 0;
 }
 
 static struct platform_driver fsl_pq_mdio_driver = {
@@ -536,9 +526,10 @@ static struct platform_driver fsl_pq_mdio_driver = {
 		.of_match_table = fsl_pq_mdio_match,
 	},
 	.probe = fsl_pq_mdio_probe,
-	.remove = fsl_pq_mdio_remove,
+	.remove_new = fsl_pq_mdio_remove,
 };
 
 module_platform_driver(fsl_pq_mdio_driver);
 
+MODULE_DESCRIPTION("Freescale PQ MDIO helpers");
 MODULE_LICENSE("GPL");

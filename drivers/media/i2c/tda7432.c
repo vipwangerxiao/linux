@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * For the STS-Thompson TDA7432 audio processor chip
  *
@@ -9,7 +10,7 @@
  *
  * Copyright (c) 2000 Eric Sandeen <eric_sandeen@bigfoot.com>
  * Copyright (c) 2006 Mauro Carvalho Chehab <mchehab@kernel.org>
- * This code is placed under the terms of the GNU General Public License
+ *
  * Based on tda9855.c by Steve VanDeBogart (vandebo@uclink.berkeley.edu)
  * Which was based on tda8425.c by Greg Alexander (c) 1998
  *
@@ -342,8 +343,7 @@ static const struct v4l2_subdev_ops tda7432_ops = {
  * i2c interface functions *
  * *********************** */
 
-static int tda7432_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int tda7432_probe(struct i2c_client *client)
 {
 	struct tda7432 *t;
 	struct v4l2_subdev *sd;
@@ -389,7 +389,7 @@ static int tda7432_probe(struct i2c_client *client,
 	return 0;
 }
 
-static int tda7432_remove(struct i2c_client *client)
+static void tda7432_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct tda7432 *t = to_state(sd);
@@ -397,11 +397,10 @@ static int tda7432_remove(struct i2c_client *client)
 	tda7432_set(sd);
 	v4l2_device_unregister_subdev(sd);
 	v4l2_ctrl_handler_free(&t->hdl);
-	return 0;
 }
 
 static const struct i2c_device_id tda7432_id[] = {
-	{ "tda7432", 0 },
+	{ "tda7432" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, tda7432_id);

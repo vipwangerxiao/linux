@@ -15,7 +15,6 @@
 #include <malloc.h>
 #include <inttypes.h>
 #include <stdint.h>
-#include <linux/compiler.h>
 
 #include "json_writer.h"
 
@@ -76,13 +75,10 @@ static void jsonw_puts(json_writer_t *self, const char *str)
 			fputs("\\b", self->out);
 			break;
 		case '\\':
-			fputs("\\n", self->out);
+			fputs("\\\\", self->out);
 			break;
 		case '"':
 			fputs("\\\"", self->out);
-			break;
-		case '\'':
-			fputs("\\\'", self->out);
 			break;
 		default:
 			putc(*str, self->out);
@@ -120,6 +116,12 @@ void jsonw_pretty(json_writer_t *self, bool on)
 	self->pretty = on;
 }
 
+void jsonw_reset(json_writer_t *self)
+{
+	assert(self->depth == 0);
+	self->sep = '\0';
+}
+
 /* Basic blocks */
 static void jsonw_begin(json_writer_t *self, int c)
 {
@@ -153,8 +155,7 @@ void jsonw_name(json_writer_t *self, const char *name)
 		putc(' ', self->out);
 }
 
-void __printf(2, 0)
-jsonw_vprintf_enquote(json_writer_t *self, const char *fmt, va_list ap)
+void jsonw_vprintf_enquote(json_writer_t *self, const char *fmt, va_list ap)
 {
 	jsonw_eor(self);
 	putc('"', self->out);
@@ -162,7 +163,7 @@ jsonw_vprintf_enquote(json_writer_t *self, const char *fmt, va_list ap)
 	putc('"', self->out);
 }
 
-void __printf(2, 3) jsonw_printf(json_writer_t *self, const char *fmt, ...)
+void jsonw_printf(json_writer_t *self, const char *fmt, ...)
 {
 	va_list ap;
 

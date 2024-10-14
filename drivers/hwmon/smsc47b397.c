@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * smsc47b397.c - Part of lm_sensors, Linux kernel modules
  * for hardware monitoring
@@ -10,20 +11,6 @@
  * derived in part from smsc47m1.c:
  * Copyright (C) 2002 Mark D. Studebaker <mdsxyz123@yahoo.com>
  * Copyright (C) 2004 Jean Delvare <jdelvare@suse.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -109,7 +96,7 @@ struct smsc47b397_data {
 
 	struct mutex update_lock;
 	unsigned long last_updated; /* in jiffies */
-	int valid;
+	bool valid;
 
 	/* register values */
 	u16 fan[4];
@@ -150,7 +137,7 @@ static struct smsc47b397_data *smsc47b397_update_device(struct device *dev)
 		}
 
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 
 		dev_dbg(dev, "... device update complete\n");
 	}

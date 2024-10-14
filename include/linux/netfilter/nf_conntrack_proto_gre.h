@@ -10,7 +10,6 @@ struct nf_ct_gre {
 	unsigned int timeout;
 };
 
-#ifdef __KERNEL__
 #include <net/netfilter/nf_conntrack_tuple.h>
 
 struct nf_conn;
@@ -26,11 +25,9 @@ struct nf_ct_gre_keymap {
 int nf_ct_gre_keymap_add(struct nf_conn *ct, enum ip_conntrack_dir dir,
 			 struct nf_conntrack_tuple *t);
 
-void nf_ct_gre_keymap_flush(struct net *net);
 /* delete keymap entries */
 void nf_ct_gre_keymap_destroy(struct nf_conn *ct);
 
 bool gre_pkt_to_tuple(const struct sk_buff *skb, unsigned int dataoff,
 		      struct net *net, struct nf_conntrack_tuple *tuple);
-#endif /* __KERNEL__ */
 #endif /* _CONNTRACK_PROTO_GRE_H */

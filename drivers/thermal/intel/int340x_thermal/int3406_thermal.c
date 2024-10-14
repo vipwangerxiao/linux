@@ -1,13 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * INT3406 thermal driver for display participant device
  *
  * Copyright (C) 2016, Intel Corporation
  * Authors: Aaron Lu <aaron.lu@intel.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 
 #include <linux/module.h>
@@ -182,13 +178,12 @@ err:
 	return -ENODEV;
 }
 
-static int int3406_thermal_remove(struct platform_device *pdev)
+static void int3406_thermal_remove(struct platform_device *pdev)
 {
 	struct int3406_thermal_data *d = platform_get_drvdata(pdev);
 
 	thermal_cooling_device_unregister(d->cooling_dev);
 	kfree(d->br);
-	return 0;
 }
 
 static const struct acpi_device_id int3406_thermal_match[] = {
@@ -200,7 +195,7 @@ MODULE_DEVICE_TABLE(acpi, int3406_thermal_match);
 
 static struct platform_driver int3406_thermal_driver = {
 	.probe = int3406_thermal_probe,
-	.remove = int3406_thermal_remove,
+	.remove_new = int3406_thermal_remove,
 	.driver = {
 		   .name = "int3406 thermal",
 		   .acpi_match_table = int3406_thermal_match,

@@ -74,6 +74,7 @@ static int fme_pr(struct platform_device *pdev, unsigned long arg)
 	struct dfl_fme *fme;
 	unsigned long minsz;
 	void *buf = NULL;
+	size_t length;
 	int ret = 0;
 	u64 v;
 
@@ -83,9 +84,6 @@ static int fme_pr(struct platform_device *pdev, unsigned long arg)
 		return -EFAULT;
 
 	if (port_pr.argsz < minsz || port_pr.flags)
-		return -EINVAL;
-
-	if (!IS_ALIGNED(port_pr.buffer_size, 4))
 		return -EINVAL;
 
 	/* get fme header region */
@@ -99,11 +97,13 @@ static int fme_pr(struct platform_device *pdev, unsigned long arg)
 		return -EINVAL;
 	}
 
-	if (!access_ok((void __user *)(unsigned long)port_pr.buffer_address,
-		       port_pr.buffer_size))
-		return -EFAULT;
+	/*
+	 * align PR buffer per PR bandwidth, as HW ignores the extra padding
+	 * data automatically.
+	 */
+	length = ALIGN(port_pr.buffer_size, 4);
 
-	buf = vmalloc(port_pr.buffer_size);
+	buf = vmalloc(length);
 	if (!buf)
 		return -ENOMEM;
 
@@ -140,7 +140,7 @@ static int fme_pr(struct platform_device *pdev, unsigned long arg)
 	fpga_image_info_free(region->info);
 
 	info->buf = buf;
-	info->count = port_pr.buffer_size;
+	info->count = length;
 	info->region_id = port_pr.port_id;
 	region->info = info;
 
@@ -148,7 +148,7 @@ static int fme_pr(struct platform_device *pdev, unsigned long arg)
 
 	/*
 	 * it allows userspace to reset the PR region's logic by disabling and
-	 * reenabling the bridge to clear things out between accleration runs.
+	 * reenabling the bridge to clear things out between acceleration runs.
 	 * so no need to hold the bridges after partial reconfiguration.
 	 */
 	if (region->get_bridges)
@@ -159,15 +159,12 @@ unlock_exit:
 	mutex_unlock(&pdata->lock);
 free_exit:
 	vfree(buf);
-	if (copy_to_user((void __user *)arg, &port_pr, minsz))
-		return -EFAULT;
-
 	return ret;
 }
 
 /**
  * dfl_fme_create_mgr - create fpga mgr platform device as child device
- *
+ * @feature: sub feature info
  * @pdata: fme platform_device's pdata
  *
  * Return: mgr platform device if successful, and error code otherwise.
@@ -276,7 +273,7 @@ static void dfl_fme_destroy_bridge(struct dfl_fme_bridge *fme_br)
 }
 
 /**
- * dfl_fme_destroy_bridge - destroy all fpga bridge platform device
+ * dfl_fme_destroy_bridges - destroy all fpga bridge platform device
  * @pdata: fme platform device's pdata
  */
 static void dfl_fme_destroy_bridges(struct dfl_feature_platform_data *pdata)
@@ -469,7 +466,12 @@ static long fme_pr_ioctl(struct platform_device *pdev,
 	return ret;
 }
 
-const struct dfl_feature_ops pr_mgmt_ops = {
+const struct dfl_feature_id fme_pr_mgmt_id_table[] = {
+	{.id = FME_FEATURE_ID_PR_MGMT,},
+	{0}
+};
+
+const struct dfl_feature_ops fme_pr_mgmt_ops = {
 	.init = pr_mgmt_init,
 	.uinit = pr_mgmt_uinit,
 	.ioctl = fme_pr_ioctl,

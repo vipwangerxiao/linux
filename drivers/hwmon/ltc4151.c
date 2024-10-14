@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Driver for Linear Technology LTC4151 High Voltage I2C Current
  * and Voltage Monitor
@@ -11,21 +12,6 @@
  *  Copyright (C) 2010 Ericsson AB.
  *
  * Datasheet: http://www.linear.com/docs/Datasheet/4151fc.pdf
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
- *
  */
 
 #include <linux/kernel.h>
@@ -91,7 +77,7 @@ static struct ltc4151_data *ltc4151_update_device(struct device *dev)
 			data->regs[i] = val;
 		}
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 	}
 abort:
 	mutex_unlock(&data->update_lock);
@@ -142,7 +128,7 @@ static ssize_t ltc4151_value_show(struct device *dev,
 		return PTR_ERR(data);
 
 	value = ltc4151_get_value(data, attr->index);
-	return snprintf(buf, PAGE_SIZE, "%d\n", value);
+	return sysfs_emit(buf, "%d\n", value);
 }
 
 /*
@@ -168,8 +154,7 @@ static struct attribute *ltc4151_attrs[] = {
 };
 ATTRIBUTE_GROUPS(ltc4151);
 
-static int ltc4151_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int ltc4151_probe(struct i2c_client *client)
 {
 	struct i2c_adapter *adapter = client->adapter;
 	struct device *dev = &client->dev;
@@ -203,7 +188,7 @@ static int ltc4151_probe(struct i2c_client *client,
 }
 
 static const struct i2c_device_id ltc4151_id[] = {
-	{ "ltc4151", 0 },
+	{ "ltc4151" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, ltc4151_id);

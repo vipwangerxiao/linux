@@ -14,7 +14,6 @@
 
 #include <linux/clkdev.h>
 #include <linux/delay.h>
-#include <linux/dma-mapping.h>
 #include <linux/gpio.h>
 #include <linux/gpio/machine.h>
 #include <linux/i2c.h>
@@ -23,16 +22,17 @@
 #include <linux/input/sh_keysc.h>
 #include <linux/interrupt.h>
 #include <linux/memblock.h>
-#include <linux/mfd/tmio.h>
 #include <linux/mmc/host.h>
 #include <linux/mtd/physmap.h>
 #include <linux/platform_data/lv5207lp.h>
+#include <linux/platform_data/tmio.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/fixed.h>
 #include <linux/regulator/machine.h>
 #include <linux/sh_intc.h>
 #include <linux/usb/r8a66597.h>
 #include <linux/videodev2.h>
+#include <linux/dma-map-ops.h>
 
 #include <mach/kfr2r09.h>
 
@@ -202,7 +202,7 @@ static struct platform_device kfr2r09_sh_lcdc_device = {
 };
 
 static struct lv5207lp_platform_data kfr2r09_backlight_data = {
-	.fbdev = &kfr2r09_sh_lcdc_device.dev,
+	.dev = &kfr2r09_sh_lcdc_device.dev,
 	.def_value = 13,
 	.max_value = 13,
 };
@@ -601,10 +601,9 @@ static int __init kfr2r09_devices_setup(void)
 
 	/* Initialize CEU platform device separately to map memory first */
 	device_initialize(&kfr2r09_ceu_device.dev);
-	arch_setup_pdev_archdata(&kfr2r09_ceu_device);
 	dma_declare_coherent_memory(&kfr2r09_ceu_device.dev,
 			ceu_dma_membase, ceu_dma_membase,
-			ceu_dma_membase + CEU_BUFFER_MEMORY_SIZE - 1);
+			CEU_BUFFER_MEMORY_SIZE);
 
 	platform_device_add(&kfr2r09_ceu_device);
 
@@ -634,7 +633,7 @@ static void __init kfr2r09_mv_mem_reserve(void)
 	if (!phys)
 		panic("Failed to allocate CEU memory\n");
 
-	memblock_free(phys, size);
+	memblock_phys_free(phys, size);
 	memblock_remove(phys, size);
 
 	ceu_dma_membase = phys;

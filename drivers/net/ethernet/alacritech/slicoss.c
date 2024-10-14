@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for Gigabit Ethernet adapters based on the Session Layer
  * Interface (SLIC) technology by Alacritech. The driver does not
  * support the hardware acceleration features provided by these cards.
  *
  * Copyright (C) 2016 Lino Sanfilippo <LinoSanfilippo@gmx.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
  */
 
 #include <linux/kernel.h>
@@ -35,7 +26,6 @@
 #include "slic.h"
 
 #define DRV_NAME			"slicoss"
-#define DRV_VERSION			"1.0"
 
 static const struct pci_device_id slic_id_tbl[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_ALACRITECH,
@@ -1018,7 +1008,7 @@ static void slic_set_link_autoneg(struct slic_device *sdev)
 
 static void slic_set_mac_address(struct slic_device *sdev)
 {
-	u8 *addr = sdev->netdev->dev_addr;
+	const u8 *addr = sdev->netdev->dev_addr;
 	u32 val;
 
 	val = addr[5] | addr[4] << 8 | addr[3] << 16 | addr[2] << 24;
@@ -1530,10 +1520,8 @@ static void slic_get_ethtool_stats(struct net_device *dev,
 
 static void slic_get_strings(struct net_device *dev, u32 stringset, u8 *data)
 {
-	if (stringset == ETH_SS_STATS) {
+	if (stringset == ETH_SS_STATS)
 		memcpy(data, slic_stats_strings, sizeof(slic_stats_strings));
-		data += sizeof(slic_stats_strings);
-	}
 }
 
 static void slic_get_drvinfo(struct net_device *dev,
@@ -1541,9 +1529,8 @@ static void slic_get_drvinfo(struct net_device *dev,
 {
 	struct slic_device *sdev = netdev_priv(dev);
 
-	strlcpy(info->driver, DRV_NAME, sizeof(info->driver));
-	strlcpy(info->version, DRV_VERSION, sizeof(info->version));
-	strlcpy(info->bus_info, pci_name(sdev->pdev), sizeof(info->bus_info));
+	strscpy(info->driver, DRV_NAME, sizeof(info->driver));
+	strscpy(info->bus_info, pci_name(sdev->pdev), sizeof(info->bus_info));
 }
 
 static const struct ethtool_ops slic_ethtool_ops = {
@@ -1671,7 +1658,7 @@ static int slic_read_eeprom(struct slic_device *sdev)
 		goto free_eeprom;
 	}
 	/* set mac address */
-	ether_addr_copy(sdev->netdev->dev_addr, mac[devfn]);
+	eth_hw_addr_set(sdev->netdev, mac[devfn]);
 free_eeprom:
 	dma_free_coherent(&sdev->pdev->dev, SLIC_EEPROM_SIZE, eeprom, paddr);
 
@@ -1691,17 +1678,15 @@ static int slic_init(struct slic_device *sdev)
 	slic_card_reset(sdev);
 
 	err = slic_load_firmware(sdev);
-	if (err) {
-		dev_err(&sdev->pdev->dev, "failed to load firmware\n");
-		return err;
-	}
+	if (err)
+		return dev_err_probe(&sdev->pdev->dev, err,
+			"failed to load firmware\n");
 
 	/* we need the shared memory to read EEPROM so set it up temporarily */
 	err = slic_init_shmem(sdev);
-	if (err) {
-		dev_err(&sdev->pdev->dev, "failed to init shared memory\n");
-		return err;
-	}
+	if (err)
+		return dev_err_probe(&sdev->pdev->dev, err,
+			"failed to init shared memory\n");
 
 	err = slic_read_eeprom(sdev);
 	if (err) {
@@ -1723,13 +1708,13 @@ static bool slic_is_fiber(unsigned short subdev)
 {
 	switch (subdev) {
 	/* Mojave */
-	case PCI_SUBDEVICE_ID_ALACRITECH_1000X1F: /* fallthrough */
-	case PCI_SUBDEVICE_ID_ALACRITECH_SES1001F: /* fallthrough */
+	case PCI_SUBDEVICE_ID_ALACRITECH_1000X1F:
+	case PCI_SUBDEVICE_ID_ALACRITECH_SES1001F: fallthrough;
 	/* Oasis */
-	case PCI_SUBDEVICE_ID_ALACRITECH_SEN2002XF: /* fallthrough */
-	case PCI_SUBDEVICE_ID_ALACRITECH_SEN2001XF: /* fallthrough */
-	case PCI_SUBDEVICE_ID_ALACRITECH_SEN2104EF: /* fallthrough */
-	case PCI_SUBDEVICE_ID_ALACRITECH_SEN2102EF: /* fallthrough */
+	case PCI_SUBDEVICE_ID_ALACRITECH_SEN2002XF:
+	case PCI_SUBDEVICE_ID_ALACRITECH_SEN2001XF:
+	case PCI_SUBDEVICE_ID_ALACRITECH_SEN2104EF:
+	case PCI_SUBDEVICE_ID_ALACRITECH_SEN2102EF:
 		return true;
 	}
 	return false;
@@ -1754,10 +1739,9 @@ static int slic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	int err;
 
 	err = pci_enable_device(pdev);
-	if (err) {
-		dev_err(&pdev->dev, "failed to enable PCI device\n");
-		return err;
-	}
+	if (err)
+		return dev_err_probe(&pdev->dev, err,
+			"failed to enable PCI device\n");
 
 	pci_set_master(pdev);
 	pci_try_set_mwi(pdev);
@@ -1800,7 +1784,7 @@ static int slic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	sdev->is_fiber = slic_is_fiber(pdev->subsystem_device);
 	sdev->pdev = pdev;
 	sdev->netdev = dev;
-	sdev->regs = ioremap_nocache(pci_resource_start(pdev, 0),
+	sdev->regs = ioremap(pci_resource_start(pdev, 0),
 				     pci_resource_len(pdev, 0));
 	if (!sdev->regs) {
 		dev_err(&pdev->dev, "failed to map registers\n");
@@ -1814,7 +1798,7 @@ static int slic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto unmap;
 	}
 
-	netif_napi_add(dev, &sdev->napi, slic_poll, SLIC_NAPI_WEIGHT);
+	netif_napi_add(dev, &sdev->napi, slic_poll);
 	netif_carrier_off(dev);
 
 	err = register_netdev(dev);
@@ -1861,4 +1845,3 @@ module_pci_driver(slic_driver);
 MODULE_DESCRIPTION("Alacritech non-accelerated SLIC driver");
 MODULE_AUTHOR("Lino Sanfilippo <LinoSanfilippo@gmx.de>");
 MODULE_LICENSE("GPL");
-MODULE_VERSION(DRV_VERSION);

@@ -1,21 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * OSS compatible sequencer driver
  *
  * Copyright (C) 1998,99 Takashi Iwai <tiwai@suse.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 
 #ifndef __SEQ_OSS_DEVICE_H
@@ -129,10 +116,6 @@ __poll_t snd_seq_oss_poll(struct seq_oss_devinfo *dp, struct file *file, poll_ta
 
 void snd_seq_oss_reset(struct seq_oss_devinfo *dp);
 
-/* */
-void snd_seq_oss_process_queue(struct seq_oss_devinfo *dp, abstime_t time);
-
-
 /* proc interface */
 void snd_seq_oss_system_info_read(struct snd_info_buffer *buf);
 void snd_seq_oss_midi_info_read(struct snd_info_buffer *buf);
@@ -176,6 +159,6 @@ snd_seq_oss_fill_addr(struct seq_oss_devinfo *dp, struct snd_seq_event *ev,
 
 
 /* misc. functions for proc interface */
-char *enabled_str(int bool);
+char *enabled_str(bool b);
 
 #endif /* __SEQ_OSS_DEVICE_H */

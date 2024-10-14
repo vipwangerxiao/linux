@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * vmx_close_while_nested
  *
  * Copyright (C) 2019, Red Hat, Inc.
- *
- * This work is licensed under the terms of the GNU GPL, version 2.
  *
  * Verify that nothing bad happens if a KVM user exits with open
  * file descriptors while executing a nested guest.
@@ -19,28 +18,21 @@
 
 #include "kselftest.h"
 
-#define VCPU_ID		5
-
 enum {
 	PORT_L0_EXIT = 0x2000,
 };
 
-/* The virtual machine object. */
-static struct kvm_vm *vm;
-
 static void l2_guest_code(void)
 {
 	/* Exit to L0 */
-        asm volatile("inb %%dx, %%al"
-                     : : [port] "d" (PORT_L0_EXIT) : "rax");
+	asm volatile("inb %%dx, %%al"
+		     : : [port] "d" (PORT_L0_EXIT) : "rax");
 }
 
 static void l1_guest_code(struct vmx_pages *vmx_pages)
 {
 #define L2_GUEST_STACK_SIZE 64
 	unsigned long l2_guest_stack[L2_GUEST_STACK_SIZE];
-	uint32_t control;
-	uintptr_t save_cr3;
 
 	GUEST_ASSERT(prepare_for_vmx_operation(vmx_pages));
 	GUEST_ASSERT(load_vmcs(vmx_pages));
@@ -55,41 +47,34 @@ static void l1_guest_code(struct vmx_pages *vmx_pages)
 
 int main(int argc, char *argv[])
 {
-	struct vmx_pages *vmx_pages;
 	vm_vaddr_t vmx_pages_gva;
-	struct kvm_cpuid_entry2 *entry = kvm_get_supported_cpuid_entry(1);
+	struct kvm_vcpu *vcpu;
+	struct kvm_vm *vm;
 
-	if (!(entry->ecx & CPUID_VMX)) {
-		fprintf(stderr, "nested VMX not enabled, skipping test\n");
-		exit(KSFT_SKIP);
-	}
+	TEST_REQUIRE(kvm_cpu_has(X86_FEATURE_VMX));
 
-	vm = vm_create_default(VCPU_ID, 0, (void *) l1_guest_code);
-	vcpu_set_cpuid(vm, VCPU_ID, kvm_get_supported_cpuid());
+	vm = vm_create_with_one_vcpu(&vcpu, l1_guest_code);
 
 	/* Allocate VMX pages and shared descriptors (vmx_pages). */
-	vmx_pages = vcpu_alloc_vmx(vm, &vmx_pages_gva);
-	vcpu_args_set(vm, VCPU_ID, 1, vmx_pages_gva);
+	vcpu_alloc_vmx(vm, &vmx_pages_gva);
+	vcpu_args_set(vcpu, 1, vmx_pages_gva);
 
 	for (;;) {
-		volatile struct kvm_run *run = vcpu_state(vm, VCPU_ID);
+		volatile struct kvm_run *run = vcpu->run;
 		struct ucall uc;
 
-		vcpu_run(vm, VCPU_ID);
-		TEST_ASSERT(run->exit_reason == KVM_EXIT_IO,
-			    "Got exit_reason other than KVM_EXIT_IO: %u (%s)\n",
-			    run->exit_reason,
-			    exit_reason_str(run->exit_reason));
+		vcpu_run(vcpu);
+		TEST_ASSERT_KVM_EXIT_REASON(vcpu, KVM_EXIT_IO);
 
 		if (run->io.port == PORT_L0_EXIT)
 			break;
 
-		switch (get_ucall(vm, VCPU_ID, &uc)) {
+		switch (get_ucall(vcpu, &uc)) {
 		case UCALL_ABORT:
-			TEST_ASSERT(false, "%s", (const char *)uc.args[0]);
+			REPORT_GUEST_ASSERT(uc);
 			/* NOT REACHED */
 		default:
-			TEST_ASSERT(false, "Unknown ucall 0x%x.", uc.cmd);
+			TEST_FAIL("Unknown ucall %lu", uc.cmd);
 		}
 	}
 }

@@ -1,13 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  MMU context allocation for 64-bit kernels.
  *
  *  Copyright (C) 2004 Anton Blanchard, IBM Corp. <anton@samba.org>
- *
- *  This program is free software; you can redistribute it and/or
- *  modify it under the terms of the GNU General Public License
- *  as published by the Free Software Foundation; either version
- *  2 of the License, or (at your option) any later version.
- *
  */
 
 #include <linux/sched.h>
@@ -22,9 +17,12 @@
 #include <linux/export.h>
 #include <linux/gfp.h>
 #include <linux/slab.h>
+#include <linux/cpu.h>
 
 #include <asm/mmu_context.h>
 #include <asm/pgalloc.h>
+
+#include "internal.h"
 
 static DEFINE_IDA(mmu_context_ida);
 
@@ -33,7 +31,8 @@ static int alloc_context_id(int min_id, int max_id)
 	return ida_alloc_range(&mmu_context_ida, min_id, max_id, GFP_KERNEL);
 }
 
-void hash__reserve_context_id(int id)
+#ifdef CONFIG_PPC_64S_HASH_MMU
+void __init hash__reserve_context_id(int id)
 {
 	int result = ida_alloc_range(&mmu_context_ida, id, id, GFP_KERNEL);
 
@@ -52,23 +51,55 @@ int hash__alloc_context_id(void)
 	return alloc_context_id(MIN_USER_CONTEXT, max);
 }
 EXPORT_SYMBOL_GPL(hash__alloc_context_id);
+#endif
 
-void slb_setup_new_exec(void);
+#ifdef CONFIG_PPC_64S_HASH_MMU
+static int realloc_context_ids(mm_context_t *ctx)
+{
+	int i, id;
+
+	/*
+	 * id 0 (aka. ctx->id) is special, we always allocate a new one, even if
+	 * there wasn't one allocated previously (which happens in the exec
+	 * case where ctx is newly allocated).
+	 *
+	 * We have to be a bit careful here. We must keep the existing ids in
+	 * the array, so that we can test if they're non-zero to decide if we
+	 * need to allocate a new one. However in case of error we must free the
+	 * ids we've allocated but *not* any of the existing ones (or risk a
+	 * UAF). That's why we decrement i at the start of the error handling
+	 * loop, to skip the id that we just tested but couldn't reallocate.
+	 */
+	for (i = 0; i < ARRAY_SIZE(ctx->extended_id); i++) {
+		if (i == 0 || ctx->extended_id[i]) {
+			id = hash__alloc_context_id();
+			if (id < 0)
+				goto error;
+
+			ctx->extended_id[i] = id;
+		}
+	}
+
+	/* The caller expects us to return id */
+	return ctx->id;
+
+error:
+	for (i--; i >= 0; i--) {
+		if (ctx->extended_id[i])
+			ida_free(&mmu_context_ida, ctx->extended_id[i]);
+	}
+
+	return id;
+}
 
 static int hash__init_new_context(struct mm_struct *mm)
 {
 	int index;
 
-	index = hash__alloc_context_id();
-	if (index < 0)
-		return index;
-
 	mm->context.hash_context = kmalloc(sizeof(struct hash_mm_context),
 					   GFP_KERNEL);
-	if (!mm->context.hash_context) {
-		ida_free(&mmu_context_ida, index);
+	if (!mm->context.hash_context)
 		return -ENOMEM;
-	}
 
 	/*
 	 * The old code would re-promote on fork, we don't do that when using
@@ -91,18 +122,25 @@ static int hash__init_new_context(struct mm_struct *mm)
 		/* This is fork. Copy hash_context details from current->mm */
 		memcpy(mm->context.hash_context, current->mm->context.hash_context, sizeof(struct hash_mm_context));
 #ifdef CONFIG_PPC_SUBPAGE_PROT
-		/* inherit subpage prot detalis if we have one. */
+		/* inherit subpage prot details if we have one. */
 		if (current->mm->context.hash_context->spt) {
 			mm->context.hash_context->spt = kmalloc(sizeof(struct subpage_prot_table),
 								GFP_KERNEL);
 			if (!mm->context.hash_context->spt) {
-				ida_free(&mmu_context_ida, index);
 				kfree(mm->context.hash_context);
 				return -ENOMEM;
 			}
 		}
 #endif
+	}
 
+	index = realloc_context_ids(&mm->context);
+	if (index < 0) {
+#ifdef CONFIG_PPC_SUBPAGE_PROT
+		kfree(mm->context.hash_context->spt);
+#endif
+		kfree(mm->context.hash_context);
+		return index;
 	}
 
 	pkey_mm_init(mm);
@@ -115,6 +153,13 @@ void hash__setup_new_exec(void)
 
 	slb_setup_new_exec();
 }
+#else
+static inline int hash__init_new_context(struct mm_struct *mm)
+{
+	BUILD_BUG();
+	return 0;
+}
+#endif
 
 static int radix__init_new_context(struct mm_struct *mm)
 {
@@ -140,8 +185,9 @@ static int radix__init_new_context(struct mm_struct *mm)
 	 */
 	asm volatile("ptesync;isync" : : : "memory");
 
-	mm->context.npu_context = NULL;
+#ifdef CONFIG_PPC_64S_HASH_MMU
 	mm->context.hash_context = NULL;
+#endif
 
 	return index;
 }
@@ -179,28 +225,36 @@ EXPORT_SYMBOL_GPL(__destroy_context);
 
 static void destroy_contexts(mm_context_t *ctx)
 {
-	int index, context_id;
+	if (radix_enabled()) {
+		ida_free(&mmu_context_ida, ctx->id);
+	} else {
+#ifdef CONFIG_PPC_64S_HASH_MMU
+		int index, context_id;
 
-	for (index = 0; index < ARRAY_SIZE(ctx->extended_id); index++) {
-		context_id = ctx->extended_id[index];
-		if (context_id)
-			ida_free(&mmu_context_ida, context_id);
+		for (index = 0; index < ARRAY_SIZE(ctx->extended_id); index++) {
+			context_id = ctx->extended_id[index];
+			if (context_id)
+				ida_free(&mmu_context_ida, context_id);
+		}
+		kfree(ctx->hash_context);
+#else
+		BUILD_BUG(); // radix_enabled() should be constant true
+#endif
 	}
-	kfree(ctx->hash_context);
 }
 
 static void pmd_frag_destroy(void *pmd_frag)
 {
 	int count;
-	struct page *page;
+	struct ptdesc *ptdesc;
 
-	page = virt_to_page(pmd_frag);
+	ptdesc = virt_to_ptdesc(pmd_frag);
 	/* drop all the pending references */
 	count = ((unsigned long)pmd_frag & ~PAGE_MASK) >> PMD_FRAG_SIZE_SHIFT;
 	/* We allow PTE_FRAG_NR fragments from a PTE page */
-	if (atomic_sub_and_test(PMD_FRAG_NR - count, &page->pt_frag_refcount)) {
-		pgtable_pmd_page_dtor(page);
-		__free_page(page);
+	if (atomic_sub_and_test(PMD_FRAG_NR - count, &ptdesc->pt_frag_refcount)) {
+		pagetable_pmd_dtor(ptdesc);
+		pagetable_free(ptdesc);
 	}
 }
 
@@ -223,8 +277,21 @@ void destroy_context(struct mm_struct *mm)
 #ifdef CONFIG_SPAPR_TCE_IOMMU
 	WARN_ON_ONCE(!list_empty(&mm->context.iommu_group_mem_list));
 #endif
+	/*
+	 * For tasks which were successfully initialized we end up calling
+	 * arch_exit_mmap() which clears the process table entry. And
+	 * arch_exit_mmap() is called before the required fullmm TLB flush
+	 * which does a RIC=2 flush. Hence for an initialized task, we do clear
+	 * any cached process table entries.
+	 *
+	 * The condition below handles the error case during task init. We have
+	 * set the process table entry early and if we fail a task
+	 * initialization, we need to ensure the process table entry is zeroed.
+	 * We need not worry about process table entry caches because the task
+	 * never ran with the PID value.
+	 */
 	if (radix_enabled())
-		WARN_ON(process_tb[mm->context.id].prtb0 != 0);
+		process_tb[mm->context.id].prtb0 = 0;
 	else
 		subpage_prot_free(mm);
 	destroy_contexts(&mm->context);
@@ -259,5 +326,24 @@ void radix__switch_mmu_context(struct mm_struct *prev, struct mm_struct *next)
 {
 	mtspr(SPRN_PID, next->context.id);
 	isync();
+}
+#endif
+
+/**
+ * cleanup_cpu_mmu_context - Clean up MMU details for this CPU (newly offlined)
+ *
+ * This clears the CPU from mm_cpumask for all processes, and then flushes the
+ * local TLB to ensure TLB coherency in case the CPU is onlined again.
+ *
+ * KVM guest translations are not necessarily flushed here. If KVM started
+ * using mm_cpumask or the Linux APIs which do, this would have to be resolved.
+ */
+#ifdef CONFIG_HOTPLUG_CPU
+void cleanup_cpu_mmu_context(void)
+{
+	int cpu = smp_processor_id();
+
+	clear_tasks_mm_cpumask(cpu);
+	tlbiel_all();
 }
 #endif

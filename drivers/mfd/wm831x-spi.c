@@ -1,21 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * wm831x-spi.c  --  SPI access for Wolfson WM831x PMICs
  *
  * Copyright 2009,2010 Wolfson Microelectronics PLC.
  *
  * Author: Mark Brown <broonie@opensource.wolfsonmicro.com>
- *
- *  This program is free software; you can redistribute  it and/or modify it
- *  under  the terms of  the GNU General  Public License as published by the
- *  Free Software Foundation;  either version 2 of the  License, or (at your
- *  option) any later version.
- *
  */
 
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/pm.h>
 #include <linux/spi/spi.h>
 #include <linux/regmap.h>
@@ -26,21 +20,14 @@
 static int wm831x_spi_probe(struct spi_device *spi)
 {
 	struct wm831x_pdata *pdata = dev_get_platdata(&spi->dev);
-	const struct spi_device_id *id = spi_get_device_id(spi);
-	const struct of_device_id *of_id;
 	struct wm831x *wm831x;
 	enum wm831x_parent type;
 	int ret;
 
-	if (spi->dev.of_node) {
-		of_id = of_match_device(wm831x_of_match, &spi->dev);
-		if (!of_id) {
-			dev_err(&spi->dev, "Failed to match device\n");
-			return -ENODEV;
-		}
-		type = (enum wm831x_parent)of_id->data;
-	} else {
-		type = (enum wm831x_parent)id->driver_data;
+	type = (uintptr_t)spi_get_device_match_data(spi);
+	if (!type) {
+		dev_err(&spi->dev, "Failed to match device\n");
+		return -ENODEV;
 	}
 
 	wm831x = devm_kzalloc(&spi->dev, sizeof(struct wm831x), GFP_KERNEL);

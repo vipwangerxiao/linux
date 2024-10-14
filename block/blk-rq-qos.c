@@ -10,16 +10,10 @@ static bool atomic_inc_below(atomic_t *v, unsigned int below)
 {
 	unsigned int cur = atomic_read(v);
 
-	for (;;) {
-		unsigned int old;
-
+	do {
 		if (cur >= below)
 			return false;
-		old = atomic_cmpxchg(v, cur, cur + 1);
-		if (old == cur)
-			break;
-		cur = old;
-	}
+	} while (!atomic_try_cmpxchg(v, &cur, cur + 1));
 
 	return true;
 }
@@ -83,11 +77,29 @@ void __rq_qos_track(struct rq_qos *rqos, struct request *rq, struct bio *bio)
 	} while (rqos);
 }
 
+void __rq_qos_merge(struct rq_qos *rqos, struct request *rq, struct bio *bio)
+{
+	do {
+		if (rqos->ops->merge)
+			rqos->ops->merge(rqos, rq, bio);
+		rqos = rqos->next;
+	} while (rqos);
+}
+
 void __rq_qos_done_bio(struct rq_qos *rqos, struct bio *bio)
 {
 	do {
 		if (rqos->ops->done_bio)
 			rqos->ops->done_bio(rqos, bio);
+		rqos = rqos->next;
+	} while (rqos);
+}
+
+void __rq_qos_queue_depth_changed(struct rq_qos *rqos)
+{
+	do {
+		if (rqos->ops->queue_depth_changed)
+			rqos->ops->queue_depth_changed(rqos);
 		rqos = rqos->next;
 	} while (rqos);
 }
@@ -142,24 +154,27 @@ bool rq_depth_calc_max_depth(struct rq_depth *rqd)
 	return ret;
 }
 
-void rq_depth_scale_up(struct rq_depth *rqd)
+/* Returns true on success and false if scaling up wasn't possible */
+bool rq_depth_scale_up(struct rq_depth *rqd)
 {
 	/*
 	 * Hit max in previous round, stop here
 	 */
 	if (rqd->scaled_max)
-		return;
+		return false;
 
 	rqd->scale_step--;
 
 	rqd->scaled_max = rq_depth_calc_max_depth(rqd);
+	return true;
 }
 
 /*
  * Scale rwb down. If 'hard_throttle' is set, do it quicker, since we
- * had a latency violation.
+ * had a latency violation. Returns true on success and returns false if
+ * scaling down wasn't possible.
  */
-void rq_depth_scale_down(struct rq_depth *rqd, bool hard_throttle)
+bool rq_depth_scale_down(struct rq_depth *rqd, bool hard_throttle)
 {
 	/*
 	 * Stop scaling down when we've hit the limit. This also prevents
@@ -167,7 +182,7 @@ void rq_depth_scale_down(struct rq_depth *rqd, bool hard_throttle)
 	 * keep up.
 	 */
 	if (rqd->max_depth == 1)
-		return;
+		return false;
 
 	if (rqd->scale_step < 0 && hard_throttle)
 		rqd->scale_step = 0;
@@ -176,6 +191,7 @@ void rq_depth_scale_down(struct rq_depth *rqd, bool hard_throttle)
 
 	rqd->scaled_max = false;
 	rq_depth_calc_max_depth(rqd);
+	return true;
 }
 
 struct rq_qos_wait_data {
@@ -202,6 +218,7 @@ static int rq_qos_wake_function(struct wait_queue_entry *curr,
 		return -1;
 
 	data->got_token = true;
+	smp_wmb();
 	list_del_init(&curr->entry);
 	wake_up_process(data->task);
 	return 1;
@@ -209,9 +226,10 @@ static int rq_qos_wake_function(struct wait_queue_entry *curr,
 
 /**
  * rq_qos_wait - throttle on a rqw if we need to
- * @private_data - caller provided specific data
- * @acquire_inflight_cb - inc the rqw->inflight counter if we can
- * @cleanup_cb - the callback to cleanup in case we race with a waker
+ * @rqw: rqw to throttle on
+ * @private_data: caller provided specific data
+ * @acquire_inflight_cb: inc the rqw->inflight counter if we can
+ * @cleanup_cb: the callback to cleanup in case we race with a waker
  *
  * This provides a uniform place for the rq_qos users to do their throttling.
  * Since you can end up with a lot of things sleeping at once, this manages the
@@ -242,35 +260,96 @@ void rq_qos_wait(struct rq_wait *rqw, void *private_data,
 	if (!has_sleeper && acquire_inflight_cb(rqw, private_data))
 		return;
 
-	prepare_to_wait_exclusive(&rqw->wait, &data.wq, TASK_UNINTERRUPTIBLE);
+	has_sleeper = !prepare_to_wait_exclusive(&rqw->wait, &data.wq,
+						 TASK_UNINTERRUPTIBLE);
 	do {
+		/* The memory barrier in set_current_state saves us here. */
 		if (data.got_token)
 			break;
 		if (!has_sleeper && acquire_inflight_cb(rqw, private_data)) {
 			finish_wait(&rqw->wait, &data.wq);
 
 			/*
-			 * We raced with wbt_wake_function() getting a token,
+			 * We raced with rq_qos_wake_function() getting a token,
 			 * which means we now have two. Put our local token
 			 * and wake anyone else potentially waiting for one.
 			 */
+			smp_rmb();
 			if (data.got_token)
 				cleanup_cb(rqw, private_data);
 			break;
 		}
 		io_schedule();
-		has_sleeper = false;
+		has_sleeper = true;
+		set_current_state(TASK_UNINTERRUPTIBLE);
 	} while (1);
 	finish_wait(&rqw->wait, &data.wq);
 }
 
 void rq_qos_exit(struct request_queue *q)
 {
-	blk_mq_debugfs_unregister_queue_rqos(q);
-
+	mutex_lock(&q->rq_qos_mutex);
 	while (q->rq_qos) {
 		struct rq_qos *rqos = q->rq_qos;
 		q->rq_qos = rqos->next;
 		rqos->ops->exit(rqos);
 	}
+	mutex_unlock(&q->rq_qos_mutex);
+}
+
+int rq_qos_add(struct rq_qos *rqos, struct gendisk *disk, enum rq_qos_id id,
+		const struct rq_qos_ops *ops)
+{
+	struct request_queue *q = disk->queue;
+
+	lockdep_assert_held(&q->rq_qos_mutex);
+
+	rqos->disk = disk;
+	rqos->id = id;
+	rqos->ops = ops;
+
+	/*
+	 * No IO can be in-flight when adding rqos, so freeze queue, which
+	 * is fine since we only support rq_qos for blk-mq queue.
+	 */
+	blk_mq_freeze_queue(q);
+
+	if (rq_qos_id(q, rqos->id))
+		goto ebusy;
+	rqos->next = q->rq_qos;
+	q->rq_qos = rqos;
+
+	blk_mq_unfreeze_queue(q);
+
+	if (rqos->ops->debugfs_attrs) {
+		mutex_lock(&q->debugfs_mutex);
+		blk_mq_debugfs_register_rqos(rqos);
+		mutex_unlock(&q->debugfs_mutex);
+	}
+
+	return 0;
+ebusy:
+	blk_mq_unfreeze_queue(q);
+	return -EBUSY;
+}
+
+void rq_qos_del(struct rq_qos *rqos)
+{
+	struct request_queue *q = rqos->disk->queue;
+	struct rq_qos **cur;
+
+	lockdep_assert_held(&q->rq_qos_mutex);
+
+	blk_mq_freeze_queue(q);
+	for (cur = &q->rq_qos; *cur; cur = &(*cur)->next) {
+		if (*cur == rqos) {
+			*cur = rqos->next;
+			break;
+		}
+	}
+	blk_mq_unfreeze_queue(q);
+
+	mutex_lock(&q->debugfs_mutex);
+	blk_mq_debugfs_unregister_rqos(rqos);
+	mutex_unlock(&q->debugfs_mutex);
 }

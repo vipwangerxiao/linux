@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* nf_nat_helper.c - generic support functions for NAT helpers
  *
  * (C) 2000-2002 Harald Welte <laforge@netfilter.org>
  * (C) 2003-2006 Netfilter Core Team <coreteam@netfilter.org>
  * (C) 2007-2012 Patrick McHardy <kaber@trash.net>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/module.h>
 #include <linux/gfp.h>
@@ -98,7 +95,7 @@ bool __nf_nat_mangle_tcp_packet(struct sk_buff *skb,
 	struct tcphdr *tcph;
 	int oldlen, datalen;
 
-	if (!skb_make_writable(skb, skb->len))
+	if (skb_ensure_writable(skb, skb->len))
 		return false;
 
 	if (rep_len > match_len &&
@@ -148,7 +145,7 @@ nf_nat_mangle_udp_packet(struct sk_buff *skb,
 	struct udphdr *udph;
 	int datalen, oldlen;
 
-	if (!skb_make_writable(skb, skb->len))
+	if (skb_ensure_writable(skb, skb->len))
 		return false;
 
 	if (rep_len > match_len &&
@@ -170,7 +167,7 @@ nf_nat_mangle_udp_packet(struct sk_buff *skb,
 	if (!udph->check && skb->ip_summed != CHECKSUM_PARTIAL)
 		return true;
 
-	nf_nat_csum_recalc(skb, nf_ct_l3num(ct), IPPROTO_TCP,
+	nf_nat_csum_recalc(skb, nf_ct_l3num(ct), IPPROTO_UDP,
 			   udph, &udph->check, datalen, oldlen);
 
 	return true;
@@ -201,3 +198,34 @@ void nf_nat_follow_master(struct nf_conn *ct,
 	nf_nat_setup_info(ct, &range, NF_NAT_MANIP_DST);
 }
 EXPORT_SYMBOL(nf_nat_follow_master);
+
+u16 nf_nat_exp_find_port(struct nf_conntrack_expect *exp, u16 port)
+{
+	static const unsigned int max_attempts = 128;
+	int range, attempts_left;
+	u16 min = port;
+
+	range = USHRT_MAX - port;
+	attempts_left = range;
+
+	if (attempts_left > max_attempts)
+		attempts_left = max_attempts;
+
+	/* Try to get same port: if not, try to change it. */
+	for (;;) {
+		int res;
+
+		exp->tuple.dst.u.tcp.port = htons(port);
+		res = nf_ct_expect_related(exp, 0);
+		if (res == 0)
+			return port;
+
+		if (res != -EBUSY || (--attempts_left < 0))
+			break;
+
+		port = min + get_random_u32_below(range);
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(nf_nat_exp_find_port);

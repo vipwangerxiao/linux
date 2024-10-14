@@ -1,17 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ISHTP bus layer messages handling
  *
  * Copyright (c) 2003-2016, Intel Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
- * more details.
- *
  */
 
 #include <linux/export.h>
@@ -22,6 +13,7 @@
 #include "ishtp-dev.h"
 #include "hbm.h"
 #include "client.h"
+#include "loader.h"
 
 /**
  * ishtp_hbm_fw_cl_allocate() - Allocate FW clients
@@ -407,11 +399,11 @@ static void ishtp_hbm_cl_connect_res(struct ishtp_device *dev,
 }
 
 /**
- * ishtp_client_disconnect_request() - Receive disconnect request
+ * ishtp_hbm_fw_disconnect_req() - Receive disconnect request
  * @dev: ISHTP device instance
  * @disconnect_req: disconnect request structure
  *
- * Disconnect request bus message from the fw. Send diconnect response.
+ * Disconnect request bus message from the fw. Send disconnect response.
  */
 static void ishtp_hbm_fw_disconnect_req(struct ishtp_device *dev,
 	struct hbm_client_connect_request *disconnect_req)
@@ -439,7 +431,7 @@ static void ishtp_hbm_fw_disconnect_req(struct ishtp_device *dev,
 }
 
 /**
- * ishtp_hbm_dma_xfer_ack(() - Receive transfer ACK
+ * ishtp_hbm_dma_xfer_ack() - Receive transfer ACK
  * @dev: ISHTP device instance
  * @dma_xfer: HBM transfer message
  *
@@ -578,6 +570,10 @@ void ishtp_hbm_dispatch(struct ishtp_device *dev,
 			ishtp_hbm_stop_req(dev);
 			return;
 		}
+
+		/* Start firmware loading process if it has loader capability */
+		if (version_res->host_version_supported & ISHTP_SUPPORT_CAP_LOADER)
+			schedule_work(&dev->work_fw_loader);
 
 		dev->version.major_version = HBM_MAJOR_VERSION;
 		dev->version.minor_version = HBM_MINOR_VERSION;
@@ -874,6 +870,20 @@ eoi:
 }
 
 /**
+ * ishtp_loader_recv_msg() - Receive a message from the ISHTP device
+ * @dev: The ISHTP device
+ * @buf: The buffer containing the message
+ */
+static void ishtp_loader_recv_msg(struct ishtp_device *dev, void *buf)
+{
+	if (dev->fw_loader_rx_buf)
+		memcpy(dev->fw_loader_rx_buf, buf, dev->fw_loader_rx_size);
+
+	dev->fw_loader_received = true;
+	wake_up_interruptible(&dev->wait_loader_recvd_msg);
+}
+
+/**
  * recv_fixed_cl_msg() - Receive fixed client message
  * @dev: ISHTP device instance
  * @ishtp_hdr: received bus message
@@ -899,6 +909,8 @@ void recv_fixed_cl_msg(struct ishtp_device *dev,
 		else
 			dev_err(dev->devc, "unknown fixed client msg [%02X]\n",
 				msg_hdr->cmd);
+	} else if (ishtp_hdr->fw_addr == ISHTP_LOADER_CLIENT_ADDR) {
+		ishtp_loader_recv_msg(dev, rd_msg_buf);
 	}
 }
 
@@ -923,7 +935,7 @@ static inline void fix_cl_hdr(struct ishtp_msg_hdr *hdr, size_t length,
 /*** Suspend and resume notification ***/
 
 static uint32_t current_state;
-static uint32_t supported_states = 0 | SUSPEND_STATE_BIT;
+static uint32_t supported_states = SUSPEND_STATE_BIT | CONNECTED_STANDBY_STATE_BIT;
 
 /**
  * ishtp_send_suspend() - Send suspend message to FW
@@ -942,7 +954,7 @@ void ishtp_send_suspend(struct ishtp_device *dev)
 	memset(&state_status_msg, 0, len);
 	state_status_msg.hdr.cmd = SYSTEM_STATE_STATUS;
 	state_status_msg.supported_states = supported_states;
-	current_state |= SUSPEND_STATE_BIT;
+	current_state |= (SUSPEND_STATE_BIT | CONNECTED_STANDBY_STATE_BIT);
 	dev->print_log(dev, "%s() sends SUSPEND notification\n", __func__);
 	state_status_msg.states_status = current_state;
 
@@ -968,7 +980,7 @@ void ishtp_send_resume(struct ishtp_device *dev)
 	memset(&state_status_msg, 0, len);
 	state_status_msg.hdr.cmd = SYSTEM_STATE_STATUS;
 	state_status_msg.supported_states = supported_states;
-	current_state &= ~SUSPEND_STATE_BIT;
+	current_state &= ~(CONNECTED_STANDBY_STATE_BIT | SUSPEND_STATE_BIT);
 	dev->print_log(dev, "%s() sends RESUME notification\n", __func__);
 	state_status_msg.states_status = current_state;
 

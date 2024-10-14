@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * arch/powerpc/sysdev/ipic.c
  *
  * IPIC routines implementations.
  *
  * Copyright 2005 Freescale Semiconductor, Inc.
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -22,9 +18,10 @@
 #include <linux/device.h>
 #include <linux/spinlock.h>
 #include <linux/fsl_devices.h>
+#include <linux/irqdomain.h>
+#include <linux/of_address.h>
 #include <asm/irq.h>
 #include <asm/io.h>
-#include <asm/prom.h>
 #include <asm/ipic.h>
 
 #include "ipic.h"
@@ -771,7 +768,7 @@ struct ipic * __init ipic_init(struct device_node *node, unsigned int flags)
 	return ipic;
 }
 
-void ipic_set_default_priority(void)
+void __init ipic_set_default_priority(void)
 {
 	ipic_write(primary_ipic->regs, IPIC_SIPRR_A, IPIC_PRIORITY_DEFAULT);
 	ipic_write(primary_ipic->regs, IPIC_SIPRR_B, IPIC_PRIORITY_DEFAULT);

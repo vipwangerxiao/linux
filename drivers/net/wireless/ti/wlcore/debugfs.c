@@ -1,24 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * This file is part of wl1271
  *
  * Copyright (C) 2009 Nokia Corporation
  *
  * Contact: Luciano Coelho <luciano.coelho@nokia.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
  */
 
 #include "debugfs.h"
@@ -66,11 +52,9 @@ void wl1271_debugfs_update_stats(struct wl1271 *wl)
 	if (unlikely(wl->state != WLCORE_STATE_ON))
 		goto out;
 
-	ret = pm_runtime_get_sync(wl->dev);
-	if (ret < 0) {
-		pm_runtime_put_noidle(wl->dev);
+	ret = pm_runtime_resume_and_get(wl->dev);
+	if (ret < 0)
 		goto out;
-	}
 
 	if (!wl->plt &&
 	    time_after(jiffies, wl->stats.fw_stats_update +
@@ -122,25 +106,15 @@ static void chip_op_handler(struct wl1271 *wl, unsigned long value,
 		return;
 	}
 
-	ret = pm_runtime_get_sync(wl->dev);
-	if (ret < 0) {
-		pm_runtime_put_noidle(wl->dev);
-
+	ret = pm_runtime_resume_and_get(wl->dev);
+	if (ret < 0)
 		return;
-	}
 
 	chip_op = arg;
 	chip_op(wl);
 
 	pm_runtime_mark_last_busy(wl->dev);
 	pm_runtime_put_autosuspend(wl->dev);
-}
-
-
-static inline void no_write_handler(struct wl1271 *wl,
-				    unsigned long value,
-				    unsigned long param)
-{
 }
 
 #define WL12XX_CONF_DEBUGFS(param, conf_sub_struct,			\
@@ -300,11 +274,9 @@ static ssize_t dynamic_ps_timeout_write(struct file *file,
 	if (unlikely(wl->state != WLCORE_STATE_ON))
 		goto out;
 
-	ret = pm_runtime_get_sync(wl->dev);
-	if (ret < 0) {
-		pm_runtime_put_noidle(wl->dev);
+	ret = pm_runtime_resume_and_get(wl->dev);
+	if (ret < 0)
 		goto out;
-	}
 
 	/* In case we're already in PSM, trigger it again to set new timeout
 	 * immediately without waiting for re-association
@@ -370,11 +342,9 @@ static ssize_t forced_ps_write(struct file *file,
 	if (unlikely(wl->state != WLCORE_STATE_ON))
 		goto out;
 
-	ret = pm_runtime_get_sync(wl->dev);
-	if (ret < 0) {
-		pm_runtime_put_noidle(wl->dev);
+	ret = pm_runtime_resume_and_get(wl->dev);
+	if (ret < 0)
 		goto out;
-	}
 
 	/* In case we're already in PSM, trigger it again to switch mode
 	 * immediately without waiting for re-association
@@ -852,11 +822,9 @@ static ssize_t rx_streaming_interval_write(struct file *file,
 
 	wl->conf.rx_streaming.interval = value;
 
-	ret = pm_runtime_get_sync(wl->dev);
-	if (ret < 0) {
-		pm_runtime_put_noidle(wl->dev);
+	ret = pm_runtime_resume_and_get(wl->dev);
+	if (ret < 0)
 		goto out;
-	}
 
 	wl12xx_for_each_wlvif_sta(wl, wlvif) {
 		wl1271_recalc_rx_streaming(wl, wlvif);
@@ -910,11 +878,9 @@ static ssize_t rx_streaming_always_write(struct file *file,
 
 	wl->conf.rx_streaming.always = value;
 
-	ret = pm_runtime_get_sync(wl->dev);
-	if (ret < 0) {
-		pm_runtime_put_noidle(wl->dev);
+	ret = pm_runtime_resume_and_get(wl->dev);
+	if (ret < 0)
 		goto out;
-	}
 
 	wl12xx_for_each_wlvif_sta(wl, wlvif) {
 		wl1271_recalc_rx_streaming(wl, wlvif);
@@ -960,11 +926,9 @@ static ssize_t beacon_filtering_write(struct file *file,
 
 	mutex_lock(&wl->mutex);
 
-	ret = pm_runtime_get_sync(wl->dev);
-	if (ret < 0) {
-		pm_runtime_put_noidle(wl->dev);
+	ret = pm_runtime_resume_and_get(wl->dev);
+	if (ret < 0)
 		goto out;
-	}
 
 	wl12xx_for_each_wlvif(wl, wlvif) {
 		ret = wl1271_acx_beacon_filter_opt(wl, wlvif, !!value);
@@ -1042,11 +1006,9 @@ static ssize_t sleep_auth_write(struct file *file,
 		goto out;
 	}
 
-	ret = pm_runtime_get_sync(wl->dev);
-	if (ret < 0) {
-		pm_runtime_put_noidle(wl->dev);
+	ret = pm_runtime_resume_and_get(wl->dev);
+	if (ret < 0)
 		goto out;
-	}
 
 	ret = wl1271_acx_sleep_auth(wl, value);
 	if (ret < 0)
@@ -1275,9 +1237,8 @@ static ssize_t fw_logger_write(struct file *file,
 	}
 
 	mutex_lock(&wl->mutex);
-	ret = pm_runtime_get_sync(wl->dev);
+	ret = pm_runtime_resume_and_get(wl->dev);
 	if (ret < 0) {
-		pm_runtime_put_noidle(wl->dev);
 		count = ret;
 		goto out;
 	}

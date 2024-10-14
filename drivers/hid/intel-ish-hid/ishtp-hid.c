@@ -1,16 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ISHTP-HID glue driver.
  *
  * Copyright (c) 2012-2016, Intel Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
- * more details.
  */
 
 #include <linux/hid.h>
@@ -191,7 +183,7 @@ void ishtp_hid_wakeup(struct hid_device *hid)
 	wake_up_interruptible(&hid_data->hid_wait);
 }
 
-static struct hid_ll_driver ishtp_hid_ll_driver = {
+static const struct hid_ll_driver ishtp_hid_ll_driver = {
 	.parse = ishtp_hid_parse,
 	.start = ishtp_hid_start,
 	.stop = ishtp_hid_stop,
@@ -219,10 +211,8 @@ int ishtp_hid_probe(unsigned int cur_hid_dev,
 	struct ishtp_hid_data *hid_data;
 
 	hid = hid_allocate_device();
-	if (IS_ERR(hid)) {
-		rv = PTR_ERR(hid);
-		return	-ENOMEM;
-	}
+	if (IS_ERR(hid))
+		return PTR_ERR(hid);
 
 	hid_data = kzalloc(sizeof(*hid_data), GFP_KERNEL);
 	if (!hid_data) {
@@ -264,7 +254,7 @@ err_hid_data:
 }
 
 /**
- * ishtp_hid_probe() - Remove registered hid device
+ * ishtp_hid_remove() - Remove registered hid device
  * @client_data:	client data pointer
  *
  * This function is used to destroy allocatd HID device.

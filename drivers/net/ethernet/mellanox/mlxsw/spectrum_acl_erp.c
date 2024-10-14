@@ -301,6 +301,7 @@ mlxsw_sp_acl_erp_table_alloc(struct mlxsw_sp_acl_erp_core *erp_core,
 			     unsigned long *p_index)
 {
 	unsigned int num_rows, entry_size;
+	unsigned long index;
 
 	/* We only allow allocations of entire rows */
 	if (num_erps % erp_core->num_erp_banks != 0)
@@ -309,10 +310,11 @@ mlxsw_sp_acl_erp_table_alloc(struct mlxsw_sp_acl_erp_core *erp_core,
 	entry_size = erp_core->erpt_entries_size[region_type];
 	num_rows = num_erps / erp_core->num_erp_banks;
 
-	*p_index = gen_pool_alloc(erp_core->erp_tables, num_rows * entry_size);
-	if (*p_index == 0)
+	index = gen_pool_alloc(erp_core->erp_tables, num_rows * entry_size);
+	if (!index)
 		return -ENOBUFS;
-	*p_index -= MLXSW_SP_ACL_ERP_GENALLOC_OFFSET;
+
+	*p_index = index - MLXSW_SP_ACL_ERP_GENALLOC_OFFSET;
 
 	return 0;
 }
@@ -1171,13 +1173,12 @@ mlxsw_sp_acl_erp_delta_fill(const struct mlxsw_sp_acl_erp_key *parent_key,
 			return -EINVAL;
 	}
 	if (si == -1) {
-		/* The masks are the same, this cannot happen.
-		 * That means the caller is broken.
+		/* The masks are the same, this can happen in case eRPs with
+		 * the same mask were created in both A-TCAM and C-TCAM.
+		 * The only possible condition under which this can happen
+		 * is identical rule insertion. Delta is not possible here.
 		 */
-		WARN_ON(1);
-		*delta_start = 0;
-		*delta_mask = 0;
-		return 0;
+		return -EINVAL;
 	}
 	pmask = (unsigned char) parent_key->mask[__MASK_IDX(si)];
 	mask = (unsigned char) key->mask[__MASK_IDX(si)];
@@ -1214,18 +1215,6 @@ static bool mlxsw_sp_acl_erp_delta_check(void *priv, const void *parent_obj,
 	err = mlxsw_sp_acl_erp_delta_fill(parent_key, key,
 					  &delta_start, &delta_mask);
 	return err ? false : true;
-}
-
-static int mlxsw_sp_acl_erp_hints_obj_cmp(const void *obj1, const void *obj2)
-{
-	const struct mlxsw_sp_acl_erp_key *key1 = obj1;
-	const struct mlxsw_sp_acl_erp_key *key2 = obj2;
-
-	/* For hints purposes, two objects are considered equal
-	 * in case the masks are the same. Does not matter what
-	 * the "ctcam" value is.
-	 */
-	return memcmp(key1->mask, key2->mask, sizeof(key1->mask));
 }
 
 static void *mlxsw_sp_acl_erp_delta_create(void *priv, void *parent_obj,
@@ -1307,7 +1296,6 @@ static void mlxsw_sp_acl_erp_root_destroy(void *priv, void *root_priv)
 static const struct objagg_ops mlxsw_sp_acl_erp_objagg_ops = {
 	.obj_size = sizeof(struct mlxsw_sp_acl_erp_key),
 	.delta_check = mlxsw_sp_acl_erp_delta_check,
-	.hints_obj_cmp = mlxsw_sp_acl_erp_hints_obj_cmp,
 	.delta_create = mlxsw_sp_acl_erp_delta_create,
 	.delta_destroy = mlxsw_sp_acl_erp_delta_destroy,
 	.root_create = mlxsw_sp_acl_erp_root_create,

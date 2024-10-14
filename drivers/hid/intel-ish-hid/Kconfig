@@ -1,10 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0-only
 menu "Intel ISH HID support"
 	depends on (X86_64 || COMPILE_TEST) && PCI
 
 config INTEL_ISH_HID
 	tristate "Intel Integrated Sensor Hub"
 	default n
-	select HID
+	depends on X86
+	depends on HID
 	help
 	  The Integrated Sensor Hub (ISH) enables the ability to offload
 	  sensor polling and algorithm processing to a dedicated low power

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef __ASM_POWERPC_IMC_PMU_H
 #define __ASM_POWERPC_IMC_PMU_H
 
@@ -7,11 +8,6 @@
  * Copyright (C) 2017 Madhavan Srinivasan, IBM Corporation.
  *           (C) 2017 Anju T Sudhakar, IBM Corporation.
  *           (C) 2017 Hemant K Shaw, IBM Corporation.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or later version.
  */
 
 #include <linux/perf_event.h>
@@ -78,14 +74,14 @@ struct imc_events {
  * The following is the data structure to hold trace imc data.
  */
 struct trace_imc_data {
-	u64 tb1;
-	u64 ip;
-	u64 val;
-	u64 cpmc1;
-	u64 cpmc2;
-	u64 cpmc3;
-	u64 cpmc4;
-	u64 tb2;
+	__be64 tb1;
+	__be64 ip;
+	__be64 val;
+	__be64 cpmc1;
+	__be64 cpmc2;
+	__be64 cpmc3;
+	__be64 cpmc4;
+	__be64 tb2;
 };
 
 /* Event attribute array index */
@@ -103,6 +99,11 @@ struct trace_imc_data {
  */
 #define IMC_TRACE_RECORD_TB1_MASK      0x3ffffffffffULL
 
+/*
+ * Bit 0:1 in third DW of IMC trace record
+ * specifies the MSR[HV PR] values.
+ */
+#define IMC_TRACE_RECORD_VAL_HVPR(x)	((x) >> 62)
 
 /*
  * Device tree parser code detects IMC pmu support and
@@ -136,7 +137,7 @@ struct imc_pmu {
  * are inited.
  */
 struct imc_pmu_ref {
-	struct mutex lock;
+	spinlock_t lock;
 	unsigned int id;
 	int refc;
 };

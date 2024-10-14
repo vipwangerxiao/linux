@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*	Copyright (C) 2009 - 2010 Ivo van Doorn <IvDoorn@gmail.com>
  *	Copyright (C) 2009 Alban Browaeys <prahal@yahoo.com>
  *	Copyright (C) 2009 Felix Fietkau <nbd@openwrt.org>
@@ -7,19 +8,6 @@
  *	Copyright (C) 2009 Xose Vazquez Perez <xose.vazquez@gmail.com>
  *	Copyright (C) 2009 Bart Zolnierkiewicz <bzolnier@gmail.com>
  *	<http://rt2x00.serialmonkey.com>
- *
- *	This program is free software; you can redistribute it and/or modify
- *	it under the terms of the GNU General Public License as published by
- *	the Free Software Foundation; either version 2 of the License, or
- *	(at your option) any later version.
- *
- *	This program is distributed in the hope that it will be useful,
- *	but WITHOUT ANY WARRANTY; without even the implied warranty of
- *	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- *	GNU General Public License for more details.
- *
- *	You should have received a copy of the GNU General Public License
- *	along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 /*	Module: rt2800mmio
@@ -35,6 +23,37 @@
 #include "rt2800.h"
 #include "rt2800lib.h"
 #include "rt2800mmio.h"
+
+unsigned int rt2800mmio_get_dma_done(struct data_queue *queue)
+{
+	struct rt2x00_dev *rt2x00dev = queue->rt2x00dev;
+	struct queue_entry *entry;
+	int idx, qid;
+
+	switch (queue->qid) {
+	case QID_AC_VO:
+	case QID_AC_VI:
+	case QID_AC_BE:
+	case QID_AC_BK:
+		qid = queue->qid;
+		idx = rt2x00mmio_register_read(rt2x00dev, TX_DTX_IDX(qid));
+		break;
+	case QID_MGMT:
+		idx = rt2x00mmio_register_read(rt2x00dev, TX_DTX_IDX(5));
+		break;
+	case QID_RX:
+		entry = rt2x00queue_get_entry(queue, Q_INDEX_DMA_DONE);
+		idx = entry->entry_idx;
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		idx = 0;
+		break;
+	}
+
+	return idx;
+}
+EXPORT_SYMBOL_GPL(rt2800mmio_get_dma_done);
 
 /*
  * TX descriptor initialization
@@ -191,18 +210,19 @@ static inline void rt2800mmio_enable_interrupt(struct rt2x00_dev *rt2x00dev,
 	spin_unlock_irq(&rt2x00dev->irqmask_lock);
 }
 
-void rt2800mmio_pretbtt_tasklet(unsigned long data)
+void rt2800mmio_pretbtt_tasklet(struct tasklet_struct *t)
 {
-	struct rt2x00_dev *rt2x00dev = (struct rt2x00_dev *)data;
+	struct rt2x00_dev *rt2x00dev = from_tasklet(rt2x00dev, t,
+						    pretbtt_tasklet);
 	rt2x00lib_pretbtt(rt2x00dev);
 	if (test_bit(DEVICE_STATE_ENABLED_RADIO, &rt2x00dev->flags))
 		rt2800mmio_enable_interrupt(rt2x00dev, INT_MASK_CSR_PRE_TBTT);
 }
 EXPORT_SYMBOL_GPL(rt2800mmio_pretbtt_tasklet);
 
-void rt2800mmio_tbtt_tasklet(unsigned long data)
+void rt2800mmio_tbtt_tasklet(struct tasklet_struct *t)
 {
-	struct rt2x00_dev *rt2x00dev = (struct rt2x00_dev *)data;
+	struct rt2x00_dev *rt2x00dev = from_tasklet(rt2x00dev, t, tbtt_tasklet);
 	struct rt2800_drv_data *drv_data = rt2x00dev->drv_data;
 	u32 reg;
 
@@ -235,9 +255,10 @@ void rt2800mmio_tbtt_tasklet(unsigned long data)
 }
 EXPORT_SYMBOL_GPL(rt2800mmio_tbtt_tasklet);
 
-void rt2800mmio_rxdone_tasklet(unsigned long data)
+void rt2800mmio_rxdone_tasklet(struct tasklet_struct *t)
 {
-	struct rt2x00_dev *rt2x00dev = (struct rt2x00_dev *)data;
+	struct rt2x00_dev *rt2x00dev = from_tasklet(rt2x00dev, t,
+						    rxdone_tasklet);
 	if (rt2x00mmio_rxdone(rt2x00dev))
 		tasklet_schedule(&rt2x00dev->rxdone_tasklet);
 	else if (test_bit(DEVICE_STATE_ENABLED_RADIO, &rt2x00dev->flags))
@@ -245,9 +266,10 @@ void rt2800mmio_rxdone_tasklet(unsigned long data)
 }
 EXPORT_SYMBOL_GPL(rt2800mmio_rxdone_tasklet);
 
-void rt2800mmio_autowake_tasklet(unsigned long data)
+void rt2800mmio_autowake_tasklet(struct tasklet_struct *t)
 {
-	struct rt2x00_dev *rt2x00dev = (struct rt2x00_dev *)data;
+	struct rt2x00_dev *rt2x00dev = from_tasklet(rt2x00dev, t,
+						    autowake_tasklet);
 	rt2800mmio_wakeup(rt2x00dev);
 	if (test_bit(DEVICE_STATE_ENABLED_RADIO, &rt2x00dev->flags))
 		rt2800mmio_enable_interrupt(rt2x00dev,
@@ -288,9 +310,10 @@ static void rt2800mmio_fetch_txstatus(struct rt2x00_dev *rt2x00dev)
 	spin_unlock_irqrestore(&rt2x00dev->irqmask_lock, flags);
 }
 
-void rt2800mmio_txstatus_tasklet(unsigned long data)
+void rt2800mmio_txstatus_tasklet(struct tasklet_struct *t)
 {
-	struct rt2x00_dev *rt2x00dev = (struct rt2x00_dev *)data;
+	struct rt2x00_dev *rt2x00dev = from_tasklet(rt2x00dev, t,
+						    txstatus_tasklet);
 
 	rt2800_txdone(rt2x00dev, 16);
 
@@ -574,7 +597,6 @@ void rt2800mmio_queue_init(struct data_queue *queue)
 		break;
 
 	case QID_ATIM:
-		/* fallthrough */
 	default:
 		BUG();
 		break;
@@ -737,6 +759,9 @@ int rt2800mmio_init_registers(struct rt2x00_dev *rt2x00dev)
 	}
 
 	rt2x00mmio_register_write(rt2x00dev, PWR_PIN_CFG, 0x00000003);
+
+	if (rt2x00_rt(rt2x00dev, RT6352))
+		return 0;
 
 	reg = 0;
 	rt2x00_set_field32(&reg, MAC_SYS_CTRL_RESET_CSR, 1);

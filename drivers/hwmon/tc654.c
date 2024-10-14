@@ -1,17 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * tc654.c - Linux kernel modules for fan speed controller
  *
  * Copyright (C) 2016 Allied Telesis Labs NZ
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/bitops.h>
@@ -24,6 +15,7 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
+#include <linux/thermal.h>
 #include <linux/util_macros.h>
 
 enum tc654_regs {
@@ -388,28 +380,20 @@ static ssize_t pwm_show(struct device *dev, struct device_attribute *da,
 	return sprintf(buf, "%d\n", pwm);
 }
 
-static ssize_t pwm_store(struct device *dev, struct device_attribute *da,
-			 const char *buf, size_t count)
+static int _set_pwm(struct tc654_data *data, unsigned long val)
 {
-	struct tc654_data *data = dev_get_drvdata(dev);
 	struct i2c_client *client = data->client;
-	unsigned long val;
 	int ret;
-
-	if (kstrtoul(buf, 10, &val))
-		return -EINVAL;
-	if (val > 255)
-		return -EINVAL;
 
 	mutex_lock(&data->update_lock);
 
-	if (val == 0)
+	if (val == 0) {
 		data->config |= TC654_REG_CONFIG_SDM;
-	else
+		data->duty_cycle = 0;
+	} else {
 		data->config &= ~TC654_REG_CONFIG_SDM;
-
-	data->duty_cycle = find_closest(val, tc654_pwm_map,
-					ARRAY_SIZE(tc654_pwm_map));
+		data->duty_cycle = val - 1;
+	}
 
 	ret = i2c_smbus_write_byte_data(client, TC654_REG_CONFIG, data->config);
 	if (ret < 0)
@@ -420,6 +404,24 @@ static ssize_t pwm_store(struct device *dev, struct device_attribute *da,
 
 out:
 	mutex_unlock(&data->update_lock);
+	return ret;
+}
+
+static ssize_t pwm_store(struct device *dev, struct device_attribute *da,
+			 const char *buf, size_t count)
+{
+	struct tc654_data *data = dev_get_drvdata(dev);
+	unsigned long val;
+	int ret;
+
+	if (kstrtoul(buf, 10, &val))
+		return -EINVAL;
+	if (val > 255)
+		return -EINVAL;
+	if (val > 0)
+		val = find_closest(val, tc654_pwm_map, ARRAY_SIZE(tc654_pwm_map)) + 1;
+
+	ret = _set_pwm(data, val);
 	return ret < 0 ? ret : count;
 }
 
@@ -452,11 +454,62 @@ static struct attribute *tc654_attrs[] = {
 ATTRIBUTE_GROUPS(tc654);
 
 /*
+ * thermal cooling device functions
+ *
+ * Account for the "ShutDown Mode (SDM)" state by offsetting
+ * the 16 PWM duty cycle states by 1.
+ *
+ * State  0 =   0% PWM | Shutdown - Fan(s) are off
+ * State  1 =  30% PWM | duty_cycle =  0
+ * State  2 = ~35% PWM | duty_cycle =  1
+ * [...]
+ * State 15 = ~95% PWM | duty_cycle = 14
+ * State 16 = 100% PWM | duty_cycle = 15
+ */
+#define TC654_MAX_COOLING_STATE	16
+
+static int tc654_get_max_state(struct thermal_cooling_device *cdev, unsigned long *state)
+{
+	*state = TC654_MAX_COOLING_STATE;
+	return 0;
+}
+
+static int tc654_get_cur_state(struct thermal_cooling_device *cdev, unsigned long *state)
+{
+	struct tc654_data *data = tc654_update_client(cdev->devdata);
+
+	if (IS_ERR(data))
+		return PTR_ERR(data);
+
+	if (data->config & TC654_REG_CONFIG_SDM)
+		*state = 0;	/* FAN is off */
+	else
+		*state = data->duty_cycle + 1;	/* offset PWM States by 1 */
+
+	return 0;
+}
+
+static int tc654_set_cur_state(struct thermal_cooling_device *cdev, unsigned long state)
+{
+	struct tc654_data *data = tc654_update_client(cdev->devdata);
+
+	if (IS_ERR(data))
+		return PTR_ERR(data);
+
+	return _set_pwm(data, clamp_val(state, 0, TC654_MAX_COOLING_STATE));
+}
+
+static const struct thermal_cooling_device_ops tc654_fan_cool_ops = {
+	.get_max_state = tc654_get_max_state,
+	.get_cur_state = tc654_get_cur_state,
+	.set_cur_state = tc654_set_cur_state,
+};
+
+/*
  * device probe and removal
  */
 
-static int tc654_probe(struct i2c_client *client,
-		       const struct i2c_device_id *id)
+static int tc654_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct tc654_data *data;
@@ -482,12 +535,23 @@ static int tc654_probe(struct i2c_client *client,
 	hwmon_dev =
 	    devm_hwmon_device_register_with_groups(dev, client->name, data,
 						   tc654_groups);
-	return PTR_ERR_OR_ZERO(hwmon_dev);
+	if (IS_ERR(hwmon_dev))
+		return PTR_ERR(hwmon_dev);
+
+	if (IS_ENABLED(CONFIG_THERMAL)) {
+		struct thermal_cooling_device *cdev;
+
+		cdev = devm_thermal_of_cooling_device_register(dev, dev->of_node, client->name,
+							       hwmon_dev, &tc654_fan_cool_ops);
+		return PTR_ERR_OR_ZERO(cdev);
+	}
+
+	return 0;
 }
 
 static const struct i2c_device_id tc654_id[] = {
-	{"tc654", 0},
-	{"tc655", 0},
+	{"tc654"},
+	{"tc655"},
 	{}
 };
 

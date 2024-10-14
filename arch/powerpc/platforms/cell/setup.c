@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  linux/arch/powerpc/platforms/cell/cell_setup.c
  *
@@ -6,11 +7,6 @@
  *  Modified by Cort Dougan (cort@cs.nmt.edu)
  *  Modified by PPC64 Team, IBM Corp
  *  Modified by Cell Team, IBM Deutschland Entwicklung GmbH
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 #undef DEBUG
 
@@ -31,12 +27,11 @@
 #include <linux/mutex.h>
 #include <linux/memory_hotplug.h>
 #include <linux/of_platform.h>
+#include <linux/platform_device.h>
 
 #include <asm/mmu.h>
 #include <asm/processor.h>
 #include <asm/io.h>
-#include <asm/pgtable.h>
-#include <asm/prom.h>
 #include <asm/rtas.h>
 #include <asm/pci-bridge.h>
 #include <asm/iommu.h>
@@ -173,6 +168,8 @@ static int __init cell_publish_devices(void)
 		of_platform_device_create(np, NULL, NULL);
 	}
 
+	of_node_put(root);
+
 	/* There is no device for the MIC memory controller, thus we create
 	 * a platform device for it to attach the EDAC driver to.
 	 */
@@ -244,9 +241,6 @@ static void __init cell_setup_arch(void)
 	init_pci_config_tokens();
 
 	cbe_pervasive_init();
-#ifdef CONFIG_DUMMY_CONSOLE
-	conswitchp = &dummy_con;
-#endif
 
 	mmio_nvram_init();
 }
@@ -272,7 +266,6 @@ define_machine(cell) {
 	.get_boot_time		= rtas_get_boot_time,
 	.get_rtc_time		= rtas_get_rtc_time,
 	.set_rtc_time		= rtas_set_rtc_time,
-	.calibrate_decr		= generic_calibrate_decr,
 	.progress		= cell_progress,
 	.init_IRQ       	= cell_init_irq,
 	.pci_setup_phb		= cell_setup_phb,

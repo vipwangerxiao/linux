@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/drivers/video/omap2/dss/core.c
  *
@@ -6,18 +7,6 @@
  *
  * Some code and ideas taken from drivers/video/omap/ driver
  * by Imre Deak.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #define DSS_SUBSYS_NAME "CORE"
@@ -182,13 +171,11 @@ static int __init omap_dss_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int omap_dss_remove(struct platform_device *pdev)
+static void omap_dss_remove(struct platform_device *pdev)
 {
 	unregister_pm_notifier(&omap_dss_pm_notif_block);
 
 	dss_uninitialize_debugfs();
-
-	return 0;
 }
 
 static void omap_dss_shutdown(struct platform_device *pdev)
@@ -198,10 +185,10 @@ static void omap_dss_shutdown(struct platform_device *pdev)
 }
 
 static struct platform_driver omap_dss_driver = {
-	.remove         = omap_dss_remove,
+	.remove		= omap_dss_remove,
 	.shutdown	= omap_dss_shutdown,
-	.driver         = {
-		.name   = "omapdss",
+	.driver		= {
+		.name	= "omapdss",
 	},
 };
 
@@ -217,9 +204,6 @@ static int (*dss_output_drv_reg_funcs[])(void) __initdata = {
 #endif
 #ifdef CONFIG_FB_OMAP2_DSS_SDI
 	sdi_init_platform_driver,
-#endif
-#ifdef CONFIG_FB_OMAP2_DSS_RFBI
-	rfbi_init_platform_driver,
 #endif
 #ifdef CONFIG_FB_OMAP2_DSS_VENC
 	venc_init_platform_driver,
@@ -241,9 +225,6 @@ static void (*dss_output_drv_unreg_funcs[])(void) = {
 #endif
 #ifdef CONFIG_FB_OMAP2_DSS_VENC
 	venc_uninit_platform_driver,
-#endif
-#ifdef CONFIG_FB_OMAP2_DSS_RFBI
-	rfbi_uninit_platform_driver,
 #endif
 #ifdef CONFIG_FB_OMAP2_DSS_SDI
 	sdi_uninit_platform_driver,

@@ -3,7 +3,7 @@
 // LED Kernel Transient Trigger
 //
 // Transient trigger allows one shot timer activation. Please refer to
-// Documentation/leds/ledtrig-transient.txt for details
+// Documentation/leds/ledtrig-transient.rst for details
 // Copyright (C) 2012 Shuah Khan <shuahkhan@gmail.com>
 //
 // Based on Richard Purdie's ledtrig-timer.c and Atsushi Nemoto's
@@ -180,7 +180,7 @@ static void transient_trig_deactivate(struct led_classdev *led_cdev)
 {
 	struct transient_trig_data *transient_data = led_get_trigger_data(led_cdev);
 
-	del_timer_sync(&transient_data->timer);
+	timer_shutdown_sync(&transient_data->timer);
 	led_set_brightness_nosleep(led_cdev, transient_data->restore_state);
 	kfree(transient_data);
 }

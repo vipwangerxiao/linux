@@ -1,14 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* SHA-512 code by Jean-Luc Cooke <jlcooke@certainkey.com>
  *
  * Copyright (c) Jean-Luc Cooke <jlcooke@certainkey.com>
  * Copyright (c) Andrew McDonald <andrew@mcdonald.org.uk>
  * Copyright (c) 2003 Kyle McMartin <kyle@debian.org>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2, or (at your option) any
- * later version.
- *
  */
 #include <crypto/internal/hash.h>
 #include <linux/kernel.h>
@@ -17,11 +12,11 @@
 #include <linux/init.h>
 #include <linux/crypto.h>
 #include <linux/types.h>
-#include <crypto/sha.h>
+#include <crypto/sha2.h>
 #include <crypto/sha512_base.h>
 #include <linux/percpu.h>
 #include <asm/byteorder.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 const u8 sha384_zero_message_hash[SHA384_DIGEST_SIZE] = {
 	0x38, 0xb0, 0x60, 0xa7, 0x51, 0xac, 0x96, 0x38,
@@ -148,9 +143,6 @@ sha512_transform(u64 *state, const u8 *input)
 
 	state[0] += a; state[1] += b; state[2] += c; state[3] += d;
 	state[4] += e; state[5] += f; state[6] += g; state[7] += h;
-
-	/* erase our data */
-	a = b = c = d = e = f = g = h = t1 = t2 = 0;
 }
 
 static void sha512_generic_block_fn(struct sha512_state *sst, u8 const *src,

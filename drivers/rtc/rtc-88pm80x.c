@@ -264,7 +264,6 @@ static int pm80x_rtc_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	info->irq = platform_get_irq(pdev, 0);
 	if (info->irq < 0) {
-		dev_err(&pdev->dev, "No IRQ resource!\n");
 		ret = -EINVAL;
 		goto out;
 	}
@@ -295,11 +294,10 @@ static int pm80x_rtc_probe(struct platform_device *pdev)
 	info->rtc_dev->ops = &pm80x_rtc_ops;
 	info->rtc_dev->range_max = U32_MAX;
 
-	ret = rtc_register_device(info->rtc_dev);
-	if (ret) {
-		dev_err(&pdev->dev, "Failed to register RTC device: %d\n", ret);
+	ret = devm_rtc_register_device(info->rtc_dev);
+	if (ret)
 		goto out_rtc;
-	}
+
 	/*
 	 * enable internal XO instead of internal 3.25MHz clock since it can
 	 * free running in PMIC power-down state.
@@ -319,11 +317,10 @@ out:
 	return ret;
 }
 
-static int pm80x_rtc_remove(struct platform_device *pdev)
+static void pm80x_rtc_remove(struct platform_device *pdev)
 {
 	struct pm80x_rtc_info *info = platform_get_drvdata(pdev);
 	pm80x_free_irq(info->chip, info->irq, info);
-	return 0;
 }
 
 static struct platform_driver pm80x_rtc_driver = {
@@ -332,7 +329,7 @@ static struct platform_driver pm80x_rtc_driver = {
 		   .pm = &pm80x_rtc_pm_ops,
 		   },
 	.probe = pm80x_rtc_probe,
-	.remove = pm80x_rtc_remove,
+	.remove_new = pm80x_rtc_remove,
 };
 
 module_platform_driver(pm80x_rtc_driver);

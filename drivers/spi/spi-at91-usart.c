@@ -8,10 +8,12 @@
 
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/dmaengine.h>
+#include <linux/dma-direction.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/of_gpio.h>
+#include <linux/gpio/consumer.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -35,7 +37,7 @@
 #define US_CR_TXEN		BIT(6)
 #define US_CR_TXDIS		BIT(7)
 
-#define US_MR_SPI_MASTER	0x0E
+#define US_MR_SPI_HOST		0x0E
 #define US_MR_CHRL		GENMASK(7, 6)
 #define US_MR_CPHA		BIT(8)
 #define US_MR_CPOL		BIT(16)
@@ -58,7 +60,9 @@
 #define US_OVRE_RXRDY_IRQS	(US_IR_OVRE | US_IR_RXRDY)
 
 #define US_INIT \
-	(US_MR_SPI_MASTER | US_MR_CHRL | US_MR_CLKO | US_MR_WRDBT)
+	(US_MR_SPI_HOST | US_MR_CHRL | US_MR_CLKO | US_MR_WRDBT)
+#define US_DMA_MIN_BYTES       16
+#define US_DMA_TIMEOUT         (msecs_to_jiffies(1000))
 
 /* Register access macros */
 #define at91_usart_spi_readl(port, reg) \
@@ -72,13 +76,18 @@
 	writeb_relaxed((value), (port)->regs + US_##reg)
 
 struct at91_usart_spi {
+	struct platform_device  *mpdev;
 	struct spi_transfer	*current_transfer;
 	void __iomem		*regs;
 	struct device		*dev;
 	struct clk		*clk;
 
+	struct completion	xfer_completion;
+
 	/*used in interrupt to protect data reading*/
 	spinlock_t		lock;
+
+	phys_addr_t		phybase;
 
 	int			irq;
 	unsigned int		current_tx_remaining_bytes;
@@ -88,7 +97,167 @@ struct at91_usart_spi {
 	u32			status;
 
 	bool			xfer_failed;
+	bool			use_dma;
 };
+
+static void dma_callback(void *data)
+{
+	struct spi_controller   *ctlr = data;
+	struct at91_usart_spi   *aus = spi_controller_get_devdata(ctlr);
+
+	at91_usart_spi_writel(aus, IER, US_IR_RXRDY);
+	aus->current_rx_remaining_bytes = 0;
+	complete(&aus->xfer_completion);
+}
+
+static bool at91_usart_spi_can_dma(struct spi_controller *ctrl,
+				   struct spi_device *spi,
+				   struct spi_transfer *xfer)
+{
+	struct at91_usart_spi *aus = spi_controller_get_devdata(ctrl);
+
+	return aus->use_dma && xfer->len >= US_DMA_MIN_BYTES;
+}
+
+static int at91_usart_spi_configure_dma(struct spi_controller *ctlr,
+					struct at91_usart_spi *aus)
+{
+	struct dma_slave_config slave_config;
+	struct device *dev = &aus->mpdev->dev;
+	phys_addr_t phybase = aus->phybase;
+	dma_cap_mask_t mask;
+	int err = 0;
+
+	dma_cap_zero(mask);
+	dma_cap_set(DMA_SLAVE, mask);
+
+	ctlr->dma_tx = dma_request_chan(dev, "tx");
+	if (IS_ERR(ctlr->dma_tx)) {
+		err = PTR_ERR(ctlr->dma_tx);
+		goto at91_usart_spi_error_clear;
+	}
+
+	ctlr->dma_rx = dma_request_chan(dev, "rx");
+	if (IS_ERR(ctlr->dma_rx)) {
+		err = PTR_ERR(ctlr->dma_rx);
+		goto at91_usart_spi_error;
+	}
+
+	slave_config.dst_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
+	slave_config.src_addr_width = DMA_SLAVE_BUSWIDTH_1_BYTE;
+	slave_config.dst_addr = (dma_addr_t)phybase + US_THR;
+	slave_config.src_addr = (dma_addr_t)phybase + US_RHR;
+	slave_config.src_maxburst = 1;
+	slave_config.dst_maxburst = 1;
+	slave_config.device_fc = false;
+
+	slave_config.direction = DMA_DEV_TO_MEM;
+	if (dmaengine_slave_config(ctlr->dma_rx, &slave_config)) {
+		dev_err(&ctlr->dev,
+			"failed to configure rx dma channel\n");
+		err = -EINVAL;
+		goto at91_usart_spi_error;
+	}
+
+	slave_config.direction = DMA_MEM_TO_DEV;
+	if (dmaengine_slave_config(ctlr->dma_tx, &slave_config)) {
+		dev_err(&ctlr->dev,
+			"failed to configure tx dma channel\n");
+		err = -EINVAL;
+		goto at91_usart_spi_error;
+	}
+
+	aus->use_dma = true;
+	return 0;
+
+at91_usart_spi_error:
+	if (!IS_ERR_OR_NULL(ctlr->dma_tx))
+		dma_release_channel(ctlr->dma_tx);
+	if (!IS_ERR_OR_NULL(ctlr->dma_rx))
+		dma_release_channel(ctlr->dma_rx);
+	ctlr->dma_tx = NULL;
+	ctlr->dma_rx = NULL;
+
+at91_usart_spi_error_clear:
+	return err;
+}
+
+static void at91_usart_spi_release_dma(struct spi_controller *ctlr)
+{
+	if (ctlr->dma_rx)
+		dma_release_channel(ctlr->dma_rx);
+	if (ctlr->dma_tx)
+		dma_release_channel(ctlr->dma_tx);
+}
+
+static void at91_usart_spi_stop_dma(struct spi_controller *ctlr)
+{
+	if (ctlr->dma_rx)
+		dmaengine_terminate_all(ctlr->dma_rx);
+	if (ctlr->dma_tx)
+		dmaengine_terminate_all(ctlr->dma_tx);
+}
+
+static int at91_usart_spi_dma_transfer(struct spi_controller *ctlr,
+				       struct spi_transfer *xfer)
+{
+	struct at91_usart_spi *aus = spi_controller_get_devdata(ctlr);
+	struct dma_chan	 *rxchan = ctlr->dma_rx;
+	struct dma_chan *txchan = ctlr->dma_tx;
+	struct dma_async_tx_descriptor *rxdesc;
+	struct dma_async_tx_descriptor *txdesc;
+	dma_cookie_t cookie;
+
+	/* Disable RX interrupt */
+	at91_usart_spi_writel(aus, IDR, US_IR_RXRDY);
+
+	rxdesc = dmaengine_prep_slave_sg(rxchan,
+					 xfer->rx_sg.sgl,
+					 xfer->rx_sg.nents,
+					 DMA_DEV_TO_MEM,
+					 DMA_PREP_INTERRUPT |
+					 DMA_CTRL_ACK);
+	if (!rxdesc)
+		goto at91_usart_spi_err_dma;
+
+	txdesc = dmaengine_prep_slave_sg(txchan,
+					 xfer->tx_sg.sgl,
+					 xfer->tx_sg.nents,
+					 DMA_MEM_TO_DEV,
+					 DMA_PREP_INTERRUPT |
+					 DMA_CTRL_ACK);
+	if (!txdesc)
+		goto at91_usart_spi_err_dma;
+
+	rxdesc->callback = dma_callback;
+	rxdesc->callback_param = ctlr;
+
+	cookie = rxdesc->tx_submit(rxdesc);
+	if (dma_submit_error(cookie))
+		goto at91_usart_spi_err_dma;
+
+	cookie = txdesc->tx_submit(txdesc);
+	if (dma_submit_error(cookie))
+		goto at91_usart_spi_err_dma;
+
+	rxchan->device->device_issue_pending(rxchan);
+	txchan->device->device_issue_pending(txchan);
+
+	return 0;
+
+at91_usart_spi_err_dma:
+	/* Enable RX interrupt if something fails and fallback to PIO */
+	at91_usart_spi_writel(aus, IER, US_IR_RXRDY);
+	at91_usart_spi_stop_dma(ctlr);
+
+	return -ENOMEM;
+}
+
+static unsigned long at91_usart_spi_dma_timeout(struct at91_usart_spi *aus)
+{
+	return wait_for_completion_timeout(&aus->xfer_completion,
+					   US_DMA_TIMEOUT);
+}
 
 static inline u32 at91_usart_spi_tx_ready(struct at91_usart_spi *aus)
 {
@@ -150,7 +319,7 @@ at91_usart_spi_set_xfer_speed(struct at91_usart_spi *aus,
 static irqreturn_t at91_usart_spi_interrupt(int irq, void *dev_id)
 {
 	struct spi_controller *controller = dev_id;
-	struct at91_usart_spi *aus = spi_master_get_devdata(controller);
+	struct at91_usart_spi *aus = spi_controller_get_devdata(controller);
 
 	spin_lock(&aus->lock);
 	at91_usart_spi_read_status(aus);
@@ -175,7 +344,7 @@ static irqreturn_t at91_usart_spi_interrupt(int irq, void *dev_id)
 
 static int at91_usart_spi_setup(struct spi_device *spi)
 {
-	struct at91_usart_spi *aus = spi_master_get_devdata(spi->controller);
+	struct at91_usart_spi *aus = spi_controller_get_devdata(spi->controller);
 	u32 *ausd = spi->controller_state;
 	unsigned int mr = at91_usart_spi_readl(aus, MR);
 
@@ -206,7 +375,7 @@ static int at91_usart_spi_setup(struct spi_device *spi)
 
 	dev_dbg(&spi->dev,
 		"setup: bpw %u mode 0x%x -> mr %d %08x\n",
-		spi->bits_per_word, spi->mode, spi->chip_select, mr);
+		spi->bits_per_word, spi->mode, spi_get_chipselect(spi, 0), mr);
 
 	return 0;
 }
@@ -215,7 +384,9 @@ static int at91_usart_spi_transfer_one(struct spi_controller *ctlr,
 				       struct spi_device *spi,
 				       struct spi_transfer *xfer)
 {
-	struct at91_usart_spi *aus = spi_master_get_devdata(ctlr);
+	struct at91_usart_spi *aus = spi_controller_get_devdata(ctlr);
+	unsigned long dma_timeout = 0;
+	int ret = 0;
 
 	at91_usart_spi_set_xfer_speed(aus, xfer);
 	aus->xfer_failed = false;
@@ -225,8 +396,25 @@ static int at91_usart_spi_transfer_one(struct spi_controller *ctlr,
 
 	while ((aus->current_tx_remaining_bytes ||
 		aus->current_rx_remaining_bytes) && !aus->xfer_failed) {
-		at91_usart_spi_read_status(aus);
-		at91_usart_spi_tx(aus);
+		reinit_completion(&aus->xfer_completion);
+		if (at91_usart_spi_can_dma(ctlr, spi, xfer) &&
+		    !ret) {
+			ret = at91_usart_spi_dma_transfer(ctlr, xfer);
+			if (ret)
+				continue;
+
+			dma_timeout = at91_usart_spi_dma_timeout(aus);
+
+			if (WARN_ON(dma_timeout == 0)) {
+				dev_err(&spi->dev, "DMA transfer timeout\n");
+				return -EIO;
+			}
+			aus->current_tx_remaining_bytes = 0;
+		} else {
+			at91_usart_spi_read_status(aus);
+			at91_usart_spi_tx(aus);
+		}
+
 		cpu_relax();
 	}
 
@@ -241,7 +429,7 @@ static int at91_usart_spi_transfer_one(struct spi_controller *ctlr,
 static int at91_usart_spi_prepare_message(struct spi_controller *ctlr,
 					  struct spi_message *message)
 {
-	struct at91_usart_spi *aus = spi_master_get_devdata(ctlr);
+	struct at91_usart_spi *aus = spi_controller_get_devdata(ctlr);
 	struct spi_device *spi = message->spi;
 	u32 *ausd = spi->controller_state;
 
@@ -255,7 +443,7 @@ static int at91_usart_spi_prepare_message(struct spi_controller *ctlr,
 static int at91_usart_spi_unprepare_message(struct spi_controller *ctlr,
 					    struct spi_message *message)
 {
-	struct at91_usart_spi *aus = spi_master_get_devdata(ctlr);
+	struct at91_usart_spi *aus = spi_controller_get_devdata(ctlr);
 
 	at91_usart_spi_writel(aus, CR, US_RESET | US_DISABLE);
 	at91_usart_spi_writel(aus, IDR, US_OVRE_RXRDY_IRQS);
@@ -279,31 +467,11 @@ static void at91_usart_spi_init(struct at91_usart_spi *aus)
 
 static int at91_usart_gpio_setup(struct platform_device *pdev)
 {
-	struct device_node *np = pdev->dev.parent->of_node;
-	int i;
-	int ret;
-	int nb;
+	struct gpio_descs *cs_gpios;
 
-	if (!np)
-		return -EINVAL;
+	cs_gpios = devm_gpiod_get_array_optional(&pdev->dev, "cs", GPIOD_OUT_LOW);
 
-	nb = of_gpio_named_count(np, "cs-gpios");
-	for (i = 0; i < nb; i++) {
-		int cs_gpio = of_get_named_gpio(np, "cs-gpios", i);
-
-		if (cs_gpio < 0)
-			return cs_gpio;
-
-		if (gpio_is_valid(cs_gpio)) {
-			ret = devm_gpio_request_one(&pdev->dev, cs_gpio,
-						    GPIOF_DIR_OUT,
-						    dev_name(&pdev->dev));
-			if (ret)
-				return ret;
-		}
-	}
-
-	return 0;
+	return PTR_ERR_OR_ZERO(cs_gpios);
 }
 
 static int at91_usart_spi_probe(struct platform_device *pdev)
@@ -329,7 +497,7 @@ static int at91_usart_spi_probe(struct platform_device *pdev)
 		return PTR_ERR(clk);
 
 	ret = -ENOMEM;
-	controller = spi_alloc_master(&pdev->dev, sizeof(*aus));
+	controller = spi_alloc_host(&pdev->dev, sizeof(*aus));
 	if (!controller)
 		goto at91_usart_spi_probe_fail;
 
@@ -341,10 +509,11 @@ static int at91_usart_spi_probe(struct platform_device *pdev)
 	controller->dev.of_node = pdev->dev.parent->of_node;
 	controller->bits_per_word_mask = SPI_BPW_MASK(8);
 	controller->setup = at91_usart_spi_setup;
-	controller->flags = SPI_MASTER_MUST_RX | SPI_MASTER_MUST_TX;
+	controller->flags = SPI_CONTROLLER_MUST_RX | SPI_CONTROLLER_MUST_TX;
 	controller->transfer_one = at91_usart_spi_transfer_one;
 	controller->prepare_message = at91_usart_spi_prepare_message;
 	controller->unprepare_message = at91_usart_spi_unprepare_message;
+	controller->can_dma = at91_usart_spi_can_dma;
 	controller->cleanup = at91_usart_spi_cleanup;
 	controller->max_speed_hz = DIV_ROUND_UP(clk_get_rate(clk),
 						US_MIN_CLK_DIV);
@@ -352,7 +521,7 @@ static int at91_usart_spi_probe(struct platform_device *pdev)
 						US_MAX_CLK_DIV);
 	platform_set_drvdata(pdev, controller);
 
-	aus = spi_master_get_devdata(controller);
+	aus = spi_controller_get_devdata(controller);
 
 	aus->dev = &pdev->dev;
 	aus->regs = devm_ioremap_resource(&pdev->dev, regs);
@@ -376,10 +545,20 @@ static int at91_usart_spi_probe(struct platform_device *pdev)
 	aus->spi_clk = clk_get_rate(clk);
 	at91_usart_spi_init(aus);
 
-	spin_lock_init(&aus->lock);
-	ret = devm_spi_register_master(&pdev->dev, controller);
+	aus->phybase = regs->start;
+
+	aus->mpdev = to_platform_device(pdev->dev.parent);
+
+	ret = at91_usart_spi_configure_dma(controller, aus);
 	if (ret)
-		goto at91_usart_fail_register_master;
+		goto at91_usart_fail_dma;
+
+	spin_lock_init(&aus->lock);
+	init_completion(&aus->xfer_completion);
+
+	ret = devm_spi_register_controller(&pdev->dev, controller);
+	if (ret)
+		goto at91_usart_fail_register_controller;
 
 	dev_info(&pdev->dev,
 		 "AT91 USART SPI Controller version 0x%x at %pa (irq %d)\n",
@@ -388,17 +567,19 @@ static int at91_usart_spi_probe(struct platform_device *pdev)
 
 	return 0;
 
-at91_usart_fail_register_master:
+at91_usart_fail_register_controller:
+	at91_usart_spi_release_dma(controller);
+at91_usart_fail_dma:
 	clk_disable_unprepare(clk);
 at91_usart_spi_probe_fail:
-	spi_master_put(controller);
+	spi_controller_put(controller);
 	return ret;
 }
 
 __maybe_unused static int at91_usart_spi_runtime_suspend(struct device *dev)
 {
 	struct spi_controller *ctlr = dev_get_drvdata(dev);
-	struct at91_usart_spi *aus = spi_master_get_devdata(ctlr);
+	struct at91_usart_spi *aus = spi_controller_get_devdata(ctlr);
 
 	clk_disable_unprepare(aus->clk);
 	pinctrl_pm_select_sleep_state(dev);
@@ -409,7 +590,7 @@ __maybe_unused static int at91_usart_spi_runtime_suspend(struct device *dev)
 __maybe_unused static int at91_usart_spi_runtime_resume(struct device *dev)
 {
 	struct spi_controller *ctrl = dev_get_drvdata(dev);
-	struct at91_usart_spi *aus = spi_master_get_devdata(ctrl);
+	struct at91_usart_spi *aus = spi_controller_get_devdata(ctrl);
 
 	pinctrl_pm_select_default_state(dev);
 
@@ -434,7 +615,7 @@ __maybe_unused static int at91_usart_spi_suspend(struct device *dev)
 __maybe_unused static int at91_usart_spi_resume(struct device *dev)
 {
 	struct spi_controller *ctrl = dev_get_drvdata(dev);
-	struct at91_usart_spi *aus = spi_master_get_devdata(ctrl);
+	struct at91_usart_spi *aus = spi_controller_get_devdata(ctrl);
 	int ret;
 
 	if (!pm_runtime_suspended(dev)) {
@@ -448,14 +629,13 @@ __maybe_unused static int at91_usart_spi_resume(struct device *dev)
 	return spi_controller_resume(ctrl);
 }
 
-static int at91_usart_spi_remove(struct platform_device *pdev)
+static void at91_usart_spi_remove(struct platform_device *pdev)
 {
 	struct spi_controller *ctlr = platform_get_drvdata(pdev);
-	struct at91_usart_spi *aus = spi_master_get_devdata(ctlr);
+	struct at91_usart_spi *aus = spi_controller_get_devdata(ctlr);
 
+	at91_usart_spi_release_dma(ctlr);
 	clk_disable_unprepare(aus->clk);
-
-	return 0;
 }
 
 static const struct dev_pm_ops at91_usart_spi_pm_ops = {
@@ -464,20 +644,13 @@ static const struct dev_pm_ops at91_usart_spi_pm_ops = {
 			   at91_usart_spi_runtime_resume, NULL)
 };
 
-static const struct of_device_id at91_usart_spi_dt_ids[] = {
-	{ .compatible = "microchip,at91sam9g45-usart-spi"},
-	{ /* sentinel */}
-};
-
-MODULE_DEVICE_TABLE(of, at91_usart_spi_dt_ids);
-
 static struct platform_driver at91_usart_spi_driver = {
 	.driver = {
 		.name = "at91_usart_spi",
 		.pm = &at91_usart_spi_pm_ops,
 	},
 	.probe = at91_usart_spi_probe,
-	.remove = at91_usart_spi_remove,
+	.remove_new = at91_usart_spi_remove,
 };
 
 module_platform_driver(at91_usart_spi_driver);

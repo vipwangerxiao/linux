@@ -1,12 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* AFS common types
  *
  * Copyright (C) 2002, 2007 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #ifndef AFS_H
@@ -14,7 +10,7 @@
 
 #include <linux/in.h>
 
-#define AFS_MAXCELLNAME		64  	/* Maximum length of a cell name */
+#define AFS_MAXCELLNAME		256  	/* Maximum length of a cell name */
 #define AFS_MAXVOLNAME		64  	/* Maximum length of a volume name */
 #define AFS_MAXNSERVERS		8   	/* Maximum servers in a basic volume record */
 #define AFS_NMAXNSERVERS	13  	/* Maximum servers in a N/U-class volume record */
@@ -22,6 +18,9 @@
 #define AFSNAMEMAX		256 	/* Maximum length of a filename plus NUL */
 #define AFSPATHMAX		1024	/* Maximum length of a pathname plus NUL */
 #define AFSOPAQUEMAX		1024	/* Maximum length of an opaque field */
+
+#define AFS_VL_MAX_LIFESPAN	120
+#define AFS_PROBE_MAX_LIFESPAN	30
 
 typedef u64			afs_volid_t;
 typedef u64			afs_vnodeid_t;
@@ -69,8 +68,8 @@ typedef enum {
 
 struct afs_callback {
 	time64_t		expires_at;	/* Time at which expires */
-	unsigned		version;	/* Callback version */
-	afs_callback_type_t	type;		/* Type of callback */
+	//unsigned		version;	/* Callback version */
+	//afs_callback_type_t	type;		/* Type of callback */
 };
 
 struct afs_callback_break {
@@ -144,6 +143,14 @@ struct afs_file_status {
 	u32			abort_code;	/* Abort if bulk-fetching this failed */
 };
 
+struct afs_status_cb {
+	struct afs_file_status	status;
+	struct afs_callback	callback;
+	bool			have_status;	/* True if status record was retrieved */
+	bool			have_cb;	/* True if cb record was retrieved */
+	bool			have_error;	/* True if status.abort_code indicates an error */
+};
+
 /*
  * AFS file status change request
  */
@@ -158,7 +165,8 @@ struct afs_file_status {
  * AFS volume synchronisation information
  */
 struct afs_volsync {
-	time64_t		creation;	/* volume creation time */
+	time64_t		creation;	/* Volume creation time (or TIME64_MIN) */
+	time64_t		update;		/* Volume update time (or TIME64_MIN) */
 };
 
 /*

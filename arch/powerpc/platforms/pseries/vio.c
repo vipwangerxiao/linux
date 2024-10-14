@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * IBM PowerPC Virtual I/O Infrastructure Support.
  *
@@ -7,11 +8,6 @@
  *     Hollis Blanchard <hollisb@us.ibm.com>
  *     Stephen Rothwell
  *     Robert Jennings <rcjenn@us.ibm.com>
- *
- *      This program is free software; you can redistribute it and/or
- *      modify it under the terms of the GNU General Public License
- *      as published by the Free Software Foundation; either version
- *      2 of the License, or (at your option) any later version.
  */
 
 #include <linux/cpu.h>
@@ -24,8 +20,10 @@
 #include <linux/console.h>
 #include <linux/export.h>
 #include <linux/mm.h>
-#include <linux/dma-mapping.h>
+#include <linux/dma-map-ops.h>
 #include <linux/kobject.h>
+#include <linux/kexec.h>
+#include <linux/of_irq.h>
 
 #include <asm/iommu.h>
 #include <asm/dma.h>
@@ -35,6 +33,7 @@
 #include <asm/tce.h>
 #include <asm/page.h>
 #include <asm/hvcall.h>
+#include <asm/machdep.h>
 
 static struct vio_dev vio_bus_device  = { /* fake "parent" device */
 	.name = "vio",
@@ -524,7 +523,7 @@ static dma_addr_t vio_dma_iommu_map_page(struct device *dev, struct page *page,
 
 	if (vio_cmo_alloc(viodev, roundup(size, IOMMU_PAGE_SIZE(tbl))))
 		goto out_fail;
-	ret = iommu_map_page(dev, tbl, page, offset, size, device_to_mask(dev),
+	ret = iommu_map_page(dev, tbl, page, offset, size, dma_get_mask(dev),
 			direction, attrs);
 	if (unlikely(ret == DMA_MAPPING_ERROR))
 		goto out_deallocate;
@@ -562,9 +561,10 @@ static int vio_dma_iommu_map_sg(struct device *dev, struct scatterlist *sglist,
 	for_each_sg(sglist, sgl, nelems, count)
 		alloc_size += roundup(sgl->length, IOMMU_PAGE_SIZE(tbl));
 
-	if (vio_cmo_alloc(viodev, alloc_size))
+	ret = vio_cmo_alloc(viodev, alloc_size);
+	if (ret)
 		goto out_fail;
-	ret = ppc_iommu_map_sg(dev, tbl, sglist, nelems, device_to_mask(dev),
+	ret = ppc_iommu_map_sg(dev, tbl, sglist, nelems, dma_get_mask(dev),
 			direction, attrs);
 	if (unlikely(!ret))
 		goto out_deallocate;
@@ -579,7 +579,7 @@ out_deallocate:
 	vio_cmo_dealloc(viodev, alloc_size);
 out_fail:
 	atomic_inc(&viodev->cmo.allocs_failed);
-	return 0;
+	return ret;
 }
 
 static void vio_dma_iommu_unmap_sg(struct device *dev,
@@ -609,6 +609,10 @@ static const struct dma_map_ops vio_dma_mapping_ops = {
 	.unmap_page        = vio_dma_iommu_unmap_page,
 	.dma_supported     = dma_iommu_dma_supported,
 	.get_required_mask = dma_iommu_get_required_mask,
+	.mmap		   = dma_common_mmap,
+	.get_sgtable	   = dma_common_get_sgtable,
+	.alloc_pages_op	   = dma_common_alloc_pages,
+	.free_pages	   = dma_common_free_pages,
 };
 
 /**
@@ -987,22 +991,10 @@ static DEVICE_ATTR_RO(cmo_allocated);
 static DEVICE_ATTR_RW(cmo_desired);
 static DEVICE_ATTR_RW(cmo_allocs_failed);
 
-static struct attribute *vio_cmo_dev_attrs[] = {
-	&dev_attr_name.attr,
-	&dev_attr_devspec.attr,
-	&dev_attr_modalias.attr,
-	&dev_attr_cmo_entitled.attr,
-	&dev_attr_cmo_allocated.attr,
-	&dev_attr_cmo_desired.attr,
-	&dev_attr_cmo_allocs_failed.attr,
-	NULL,
-};
-ATTRIBUTE_GROUPS(vio_cmo_dev);
-
 /* sysfs bus functions and data structures for CMO */
 
 #define viobus_cmo_rd_attr(name)                                        \
-static ssize_t cmo_bus_##name##_show(struct bus_type *bt, char *buf)    \
+static ssize_t cmo_bus_##name##_show(const struct bus_type *bt, char *buf)    \
 {                                                                       \
 	return sprintf(buf, "%lu\n", vio_cmo.name);                     \
 }                                                                       \
@@ -1011,7 +1003,7 @@ static struct bus_attribute bus_attr_cmo_bus_##name =			\
 
 #define viobus_cmo_pool_rd_attr(name, var)                              \
 static ssize_t                                                          \
-cmo_##name##_##var##_show(struct bus_type *bt, char *buf)               \
+cmo_##name##_##var##_show(const struct bus_type *bt, char *buf)         \
 {                                                                       \
 	return sprintf(buf, "%lu\n", vio_cmo.name.var);                 \
 }                                                                       \
@@ -1026,12 +1018,12 @@ viobus_cmo_pool_rd_attr(reserve, size);
 viobus_cmo_pool_rd_attr(excess, size);
 viobus_cmo_pool_rd_attr(excess, free);
 
-static ssize_t cmo_high_show(struct bus_type *bt, char *buf)
+static ssize_t cmo_high_show(const struct bus_type *bt, char *buf)
 {
 	return sprintf(buf, "%lu\n", vio_cmo.high);
 }
 
-static ssize_t cmo_high_store(struct bus_type *bt, const char *buf,
+static ssize_t cmo_high_store(const struct bus_type *bt, const char *buf,
 			      size_t count)
 {
 	unsigned long flags;
@@ -1058,11 +1050,7 @@ static struct attribute *vio_bus_attrs[] = {
 };
 ATTRIBUTE_GROUPS(vio_bus);
 
-static void vio_cmo_sysfs_init(void)
-{
-	vio_bus_type.dev_groups = vio_cmo_dev_groups;
-	vio_bus_type.bus_groups = vio_bus_groups;
-}
+static void __init vio_cmo_sysfs_init(void) { }
 #else /* CONFIG_PPC_SMLPAR */
 int vio_cmo_entitlement_update(size_t new_entitlement) { return 0; }
 void vio_cmo_set_dev_desired(struct vio_dev *viodev, size_t desired) {}
@@ -1070,7 +1058,7 @@ static int vio_cmo_bus_probe(struct vio_dev *viodev) { return 0; }
 static void vio_cmo_bus_remove(struct vio_dev *viodev) {}
 static void vio_cmo_set_dma_ops(struct vio_dev *viodev) {}
 static void vio_cmo_bus_init(void) {}
-static void vio_cmo_sysfs_init(void) { }
+static void __init vio_cmo_sysfs_init(void) { }
 #endif /* CONFIG_PPC_SMLPAR */
 EXPORT_SYMBOL(vio_cmo_entitlement_update);
 EXPORT_SYMBOL(vio_cmo_set_dev_desired);
@@ -1178,6 +1166,8 @@ static struct iommu_table *vio_build_iommu_table(struct vio_dev *dev)
 	if (tbl == NULL)
 		return NULL;
 
+	kref_init(&tbl->it_kref);
+
 	of_parse_dma_window(dev->dev.of_node, dma_window,
 			    &tbl->it_index, &offset, &size);
 
@@ -1195,7 +1185,7 @@ static struct iommu_table *vio_build_iommu_table(struct vio_dev *dev)
 	else
 		tbl->it_ops = &iommu_table_pseries_ops;
 
-	return iommu_init_table(tbl, -1);
+	return iommu_init_table(tbl, -1, 0, 0);
 }
 
 /**
@@ -1253,12 +1243,11 @@ static int vio_bus_probe(struct device *dev)
 }
 
 /* convert from struct device to struct vio_dev and pass to driver. */
-static int vio_bus_remove(struct device *dev)
+static void vio_bus_remove(struct device *dev)
 {
 	struct vio_dev *viodev = to_vio_dev(dev);
 	struct vio_driver *viodrv = to_vio_driver(dev->driver);
 	struct device *devptr;
-	int ret = 1;
 
 	/*
 	 * Hold a reference to the device after the remove function is called
@@ -1267,13 +1256,26 @@ static int vio_bus_remove(struct device *dev)
 	devptr = get_device(dev);
 
 	if (viodrv->remove)
-		ret = viodrv->remove(viodev);
+		viodrv->remove(viodev);
 
-	if (!ret && firmware_has_feature(FW_FEATURE_CMO))
+	if (firmware_has_feature(FW_FEATURE_CMO))
 		vio_cmo_bus_remove(viodev);
 
 	put_device(devptr);
-	return ret;
+}
+
+static void vio_bus_shutdown(struct device *dev)
+{
+	struct vio_dev *viodev = to_vio_dev(dev);
+	struct vio_driver *viodrv;
+
+	if (dev->driver) {
+		viodrv = to_vio_driver(dev->driver);
+		if (viodrv->shutdown)
+			viodrv->shutdown(viodev);
+		else if (kexec_in_progress)
+			vio_bus_remove(dev);
+	}
 }
 
 /**
@@ -1283,6 +1285,10 @@ static int vio_bus_remove(struct device *dev)
 int __vio_register_driver(struct vio_driver *viodrv, struct module *owner,
 			  const char *mod_name)
 {
+	// vio_bus_type is only initialised for pseries
+	if (!machine_is(pseries))
+		return -ENODEV;
+
 	pr_debug("%s: driver %s registering\n", __func__, viodrv->name);
 
 	/* fill in 'struct driver' fields */
@@ -1359,7 +1365,7 @@ struct vio_dev *vio_register_device_node(struct device_node *of_node)
 	}
 
 	if (family == PFO) {
-		if (of_get_property(of_node, "interrupt-controller", NULL)) {
+		if (of_property_read_bool(of_node, "interrupt-controller")) {
 			pr_debug("%s: Skipping the interrupt controller %pOFn.\n",
 					__func__, of_node);
 			return NULL;
@@ -1418,7 +1424,7 @@ struct vio_dev *vio_register_device_node(struct device_node *of_node)
 	viodev->dev.bus = &vio_bus_type;
 	viodev->dev.release = vio_dev_release;
 
-	if (of_get_property(viodev->dev.of_node, "ibm,my-dma-window", NULL)) {
+	if (of_property_present(viodev->dev.of_node, "ibm,my-dma-window")) {
 		if (firmware_has_feature(FW_FEATURE_CMO))
 			vio_cmo_set_dma_ops(viodev);
 		else
@@ -1458,7 +1464,7 @@ EXPORT_SYMBOL(vio_register_device_node);
  * Starting from the root node provide, register the device node for
  * each child beneath the root.
  */
-static void vio_bus_scan_register_devices(char *root_name)
+static void __init vio_bus_scan_register_devices(char *root_name)
 {
 	struct device_node *node_root, *node_child;
 
@@ -1513,7 +1519,7 @@ static int __init vio_bus_init(void)
 
 	return 0;
 }
-postcore_initcall(vio_bus_init);
+machine_postcore_initcall(pseries, vio_bus_init);
 
 static int __init vio_device_init(void)
 {
@@ -1522,7 +1528,7 @@ static int __init vio_device_init(void)
 
 	return 0;
 }
-device_initcall(vio_device_init);
+machine_device_initcall(pseries, vio_device_init);
 
 static ssize_t name_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -1562,14 +1568,6 @@ static ssize_t modalias_show(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RO(modalias);
 
-static struct attribute *vio_dev_attrs[] = {
-	&dev_attr_name.attr,
-	&dev_attr_devspec.attr,
-	&dev_attr_modalias.attr,
-	NULL,
-};
-ATTRIBUTE_GROUPS(vio_dev);
-
 void vio_unregister_device(struct vio_dev *viodev)
 {
 	device_unregister(&viodev->dev);
@@ -1578,40 +1576,70 @@ void vio_unregister_device(struct vio_dev *viodev)
 }
 EXPORT_SYMBOL(vio_unregister_device);
 
-static int vio_bus_match(struct device *dev, struct device_driver *drv)
+static int vio_bus_match(struct device *dev, const struct device_driver *drv)
 {
 	const struct vio_dev *vio_dev = to_vio_dev(dev);
-	struct vio_driver *vio_drv = to_vio_driver(drv);
+	const struct vio_driver *vio_drv = to_vio_driver(drv);
 	const struct vio_device_id *ids = vio_drv->id_table;
 
 	return (ids != NULL) && (vio_match_device(ids, vio_dev) != NULL);
 }
 
-static int vio_hotplug(struct device *dev, struct kobj_uevent_env *env)
+static int vio_hotplug(const struct device *dev, struct kobj_uevent_env *env)
 {
 	const struct vio_dev *vio_dev = to_vio_dev(dev);
-	struct device_node *dn;
+	const struct device_node *dn;
 	const char *cp;
 
 	dn = dev->of_node;
-	if (!dn)
-		return -ENODEV;
-	cp = of_get_property(dn, "compatible", NULL);
-	if (!cp)
-		return -ENODEV;
+	if (dn && (cp = of_get_property(dn, "compatible", NULL)))
+		add_uevent_var(env, "MODALIAS=vio:T%sS%s", vio_dev->type, cp);
 
-	add_uevent_var(env, "MODALIAS=vio:T%sS%s", vio_dev->type, cp);
 	return 0;
 }
 
-struct bus_type vio_bus_type = {
+#ifdef CONFIG_PPC_SMLPAR
+static struct attribute *vio_cmo_dev_attrs[] = {
+	&dev_attr_name.attr,
+	&dev_attr_devspec.attr,
+	&dev_attr_modalias.attr,
+	&dev_attr_cmo_entitled.attr,
+	&dev_attr_cmo_allocated.attr,
+	&dev_attr_cmo_desired.attr,
+	&dev_attr_cmo_allocs_failed.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(vio_cmo_dev);
+
+const struct bus_type vio_bus_type = {
+	.name = "vio",
+	.dev_groups = vio_cmo_dev_groups,
+	.bus_groups = vio_bus_groups,
+	.uevent = vio_hotplug,
+	.match = vio_bus_match,
+	.probe = vio_bus_probe,
+	.remove = vio_bus_remove,
+	.shutdown = vio_bus_shutdown,
+};
+#else /* CONFIG_PPC_SMLPAR */
+static struct attribute *vio_dev_attrs[] = {
+	&dev_attr_name.attr,
+	&dev_attr_devspec.attr,
+	&dev_attr_modalias.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(vio_dev);
+
+const struct bus_type vio_bus_type = {
 	.name = "vio",
 	.dev_groups = vio_dev_groups,
 	.uevent = vio_hotplug,
 	.match = vio_bus_match,
 	.probe = vio_bus_probe,
 	.remove = vio_bus_remove,
+	.shutdown = vio_bus_shutdown,
 };
+#endif /* CONFIG_PPC_SMLPAR */
 
 /**
  * vio_get_attribute: - get attribute for virtual device
@@ -1628,7 +1656,6 @@ const void *vio_get_attribute(struct vio_dev *vdev, char *which, int *length)
 }
 EXPORT_SYMBOL(vio_get_attribute);
 
-#ifdef CONFIG_PPC_PSERIES
 /* vio_find_name() - internal because only vio.c knows how we formatted the
  * kobject name
  */
@@ -1662,7 +1689,7 @@ struct vio_dev *vio_find_node(struct device_node *vnode)
 	/* construct the kobject name from the device node */
 	if (of_node_is_type(vnode_parent, "vdevice")) {
 		const __be32 *prop;
-		
+
 		prop = of_get_property(vnode, "reg", NULL);
 		if (!prop)
 			goto out;
@@ -1698,11 +1725,10 @@ int vio_disable_interrupts(struct vio_dev *dev)
 	return rc;
 }
 EXPORT_SYMBOL(vio_disable_interrupts);
-#endif /* CONFIG_PPC_PSERIES */
 
 static int __init vio_init(void)
 {
 	dma_debug_add_bus(&vio_bus_type);
 	return 0;
 }
-fs_initcall(vio_init);
+machine_fs_initcall(pseries, vio_init);

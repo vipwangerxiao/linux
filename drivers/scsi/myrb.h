@@ -1,5 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0
- *
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
  * Linux Driver for Mylex DAC960/AcceleRAID/eXtremeRAID PCI RAID Controllers
  *
  * Copyright 2017 Hannes Reinecke, SUSE Linux GmbH <hare@suse.com>
@@ -712,7 +712,6 @@ struct myrb_hba {
 	struct Scsi_Host *host;
 
 	struct workqueue_struct *work_q;
-	char work_q_name[20];
 	struct delayed_work monitor_work;
 	unsigned long primary_monitor_time;
 	unsigned long secondary_monitor_time;

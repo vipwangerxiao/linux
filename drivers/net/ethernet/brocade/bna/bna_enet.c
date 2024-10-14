@@ -1,14 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Linux network driver for QLogic BR-series Converged Network Adapter.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License (GPL) Version 2 as
- * published by the Free Software Foundation
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
  */
 /*
  * Copyright (c) 2005-2014 Brocade Communications Systems, Inc.
@@ -1092,7 +1084,7 @@ bna_enet_sm_cfg_wait(struct bna_enet *enet,
 
 	case ENET_E_CHLD_STOPPED:
 		bna_enet_rx_start(enet);
-		/* Fall through */
+		fallthrough;
 	case ENET_E_FWRESP_PAUSE:
 		if (enet->flags & BNA_ENET_F_PAUSE_CHANGED) {
 			enet->flags &= ~BNA_ENET_F_PAUSE_CHANGED;
@@ -1265,7 +1257,7 @@ bna_enet_mtu_get(struct bna_enet *enet)
 void
 bna_enet_enable(struct bna_enet *enet)
 {
-	if (enet->fsm != (bfa_sm_t)bna_enet_sm_stopped)
+	if (enet->fsm != bna_enet_sm_stopped)
 		return;
 
 	enet->flags |= BNA_ENET_F_ENABLED;
@@ -1759,12 +1751,12 @@ bna_ioceth_uninit(struct bna_ioceth *ioceth)
 void
 bna_ioceth_enable(struct bna_ioceth *ioceth)
 {
-	if (ioceth->fsm == (bfa_fsm_t)bna_ioceth_sm_ready) {
+	if (ioceth->fsm == bna_ioceth_sm_ready) {
 		bnad_cb_ioceth_ready(ioceth->bna->bnad);
 		return;
 	}
 
-	if (ioceth->fsm == (bfa_fsm_t)bna_ioceth_sm_stopped)
+	if (ioceth->fsm == bna_ioceth_sm_stopped)
 		bfa_fsm_send_event(ioceth, IOCETH_E_ENABLE);
 }
 

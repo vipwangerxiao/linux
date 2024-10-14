@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/fs/sysv/inode.c
  *
@@ -311,7 +312,9 @@ static int complete_read_super(struct super_block *sb, int silent, int size)
 	sbi->s_firstinodezone = 2;
 
 	flavour_setup[sbi->s_type](sbi, &sb->s_max_links);
-	
+	if (sbi->s_firstdatazone < sbi->s_firstinodezone)
+		return 0;
+
 	sbi->s_ndatazones = sbi->s_nzones - sbi->s_firstdatazone;
 	sbi->s_inodes_per_block = bsize >> 6;
 	sbi->s_inodes_per_block_1 = (bsize >> 6)-1;
@@ -367,7 +370,8 @@ static int sysv_fill_super(struct super_block *sb, void *data, int silent)
 	sbi->s_block_base = 0;
 	mutex_init(&sbi->s_lock);
 	sb->s_fs_info = sbi;
-
+	sb->s_time_min = 0;
+	sb->s_time_max = U32_MAX;
 	sb_set_blocksize(sb, BLOCK_SIZE);
 
 	for (i = 0; i < ARRAY_SIZE(flavours) && !size; i++) {
@@ -472,10 +476,8 @@ static int v7_fill_super(struct super_block *sb, void *data, int silent)
 	struct sysv_sb_info *sbi;
 	struct buffer_head *bh;
 
-	if (440 != sizeof (struct v7_super_block))
-		panic("V7 FS: bad super-block size");
-	if (64 != sizeof (struct sysv_inode))
-		panic("sysv fs: bad i-node size");
+	BUILD_BUG_ON(sizeof(struct v7_super_block) != 440);
+	BUILD_BUG_ON(sizeof(struct sysv_inode) != 64);
 
 	sbi = kzalloc(sizeof(struct sysv_sb_info), GFP_KERNEL);
 	if (!sbi)
@@ -486,6 +488,8 @@ static int v7_fill_super(struct super_block *sb, void *data, int silent)
 	sbi->s_type = FSTYPE_V7;
 	mutex_init(&sbi->s_lock);
 	sb->s_fs_info = sbi;
+	sb->s_time_min = 0;
+	sb->s_time_max = U32_MAX;
 	
 	sb_set_blocksize(sb, 512);
 
@@ -587,4 +591,5 @@ static void __exit exit_sysv_fs(void)
 
 module_init(init_sysv_fs)
 module_exit(exit_sysv_fs)
+MODULE_DESCRIPTION("SystemV Filesystem");
 MODULE_LICENSE("GPL");

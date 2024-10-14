@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Atheros AR71XX/AR724X/AR913X built-in hardware watchdog timer.
  *
@@ -10,11 +11,6 @@
  *
  * which again was based on sa1100 driver,
  *	Copyright (C) 2000 Oleg Drokin <green@crimea.edu>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
- *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -219,8 +215,8 @@ static long ath79_wdt_ioctl(struct file *file, unsigned int cmd,
 		err = ath79_wdt_set_timeout(t);
 		if (err)
 			break;
+		fallthrough;
 
-		/* fallthrough */
 	case WDIOC_GETTIMEOUT:
 		err = put_user(timeout, p);
 		break;
@@ -235,9 +231,9 @@ static long ath79_wdt_ioctl(struct file *file, unsigned int cmd,
 
 static const struct file_operations ath79_wdt_fops = {
 	.owner		= THIS_MODULE,
-	.llseek		= no_llseek,
 	.write		= ath79_wdt_write,
 	.unlocked_ioctl	= ath79_wdt_ioctl,
+	.compat_ioctl	= compat_ptr_ioctl,
 	.open		= ath79_wdt_open,
 	.release	= ath79_wdt_release,
 };
@@ -260,19 +256,13 @@ static int ath79_wdt_probe(struct platform_device *pdev)
 	if (IS_ERR(wdt_base))
 		return PTR_ERR(wdt_base);
 
-	wdt_clk = devm_clk_get(&pdev->dev, "wdt");
+	wdt_clk = devm_clk_get_enabled(&pdev->dev, "wdt");
 	if (IS_ERR(wdt_clk))
 		return PTR_ERR(wdt_clk);
 
-	err = clk_prepare_enable(wdt_clk);
-	if (err)
-		return err;
-
 	wdt_freq = clk_get_rate(wdt_clk);
-	if (!wdt_freq) {
-		err = -EINVAL;
-		goto err_clk_disable;
-	}
+	if (!wdt_freq)
+		return -EINVAL;
 
 	max_timeout = (0xfffffffful / wdt_freq);
 	if (timeout < 1 || timeout > max_timeout) {
@@ -289,24 +279,18 @@ static int ath79_wdt_probe(struct platform_device *pdev)
 	if (err) {
 		dev_err(&pdev->dev,
 			"unable to register misc device, err=%d\n", err);
-		goto err_clk_disable;
+		return err;
 	}
 
 	return 0;
-
-err_clk_disable:
-	clk_disable_unprepare(wdt_clk);
-	return err;
 }
 
-static int ath79_wdt_remove(struct platform_device *pdev)
+static void ath79_wdt_remove(struct platform_device *pdev)
 {
 	misc_deregister(&ath79_wdt_miscdev);
-	clk_disable_unprepare(wdt_clk);
-	return 0;
 }
 
-static void ath97_wdt_shutdown(struct platform_device *pdev)
+static void ath79_wdt_shutdown(struct platform_device *pdev)
 {
 	ath79_wdt_disable();
 }
@@ -321,8 +305,8 @@ MODULE_DEVICE_TABLE(of, ath79_wdt_match);
 
 static struct platform_driver ath79_wdt_driver = {
 	.probe		= ath79_wdt_probe,
-	.remove		= ath79_wdt_remove,
-	.shutdown	= ath97_wdt_shutdown,
+	.remove_new	= ath79_wdt_remove,
+	.shutdown	= ath79_wdt_shutdown,
 	.driver		= {
 		.name	= DRIVER_NAME,
 		.of_match_table = of_match_ptr(ath79_wdt_match),

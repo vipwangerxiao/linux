@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  iptables module to match inet_addr_type() of an ip.
  *
  *  Copyright (c) 2004 Patrick McHardy <kaber@trash.net>
  *  (C) 2007 Laszlo Attila Toth <panther@balabit.hu>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation.
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 #include <linux/kernel.h>
@@ -211,13 +208,24 @@ static struct xt_match addrtype_mt_reg[] __read_mostly = {
 	},
 	{
 		.name		= "addrtype",
-		.family		= NFPROTO_UNSPEC,
+		.family		= NFPROTO_IPV4,
 		.revision	= 1,
 		.match		= addrtype_mt_v1,
 		.checkentry	= addrtype_mt_checkentry_v1,
 		.matchsize	= sizeof(struct xt_addrtype_info_v1),
 		.me		= THIS_MODULE
-	}
+	},
+#if IS_ENABLED(CONFIG_IP6_NF_IPTABLES)
+	{
+		.name		= "addrtype",
+		.family		= NFPROTO_IPV6,
+		.revision	= 1,
+		.match		= addrtype_mt_v1,
+		.checkentry	= addrtype_mt_checkentry_v1,
+		.matchsize	= sizeof(struct xt_addrtype_info_v1),
+		.me		= THIS_MODULE
+	},
+#endif
 };
 
 static int __init addrtype_mt_init(void)

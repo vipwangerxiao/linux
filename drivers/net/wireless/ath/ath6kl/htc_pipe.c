@@ -237,8 +237,7 @@ static int htc_issue_packets(struct htc_target *target,
 
 		packet->info.tx.flags |= HTC_FLAGS_TX_FIXUP_NETBUF;
 
-		/* Endianess? */
-		put_unaligned((u16) payload_len, &htc_hdr->payld_len);
+		put_unaligned_le16(payload_len, &htc_hdr->payld_len);
 		htc_hdr->flags = packet->info.tx.flags;
 		htc_hdr->eid = (u8) packet->endpoint;
 		htc_hdr->ctrl[0] = 0;
@@ -898,9 +897,6 @@ static int htc_process_trailer(struct htc_target *target, u8 *buffer,
 			break;
 		}
 
-		if (status != 0)
-			break;
-
 		/* advance buffer past this record for next time around */
 		buffer += record->len;
 		len -= record->len;
@@ -963,8 +959,8 @@ static int ath6kl_htc_pipe_rx_complete(struct ath6kl *ar, struct sk_buff *skb,
 	 * Thus the possibility of ar->htc_target being NULL
 	 * via ath6kl_recv_complete -> ath6kl_usb_io_comp_work.
 	 */
-	if (WARN_ON_ONCE(!target)) {
-		ath6kl_err("Target not yet initialized\n");
+	if (!target) {
+		ath6kl_dbg(ATH6KL_DBG_HTC, "Target not yet initialized\n");
 		status = -EINVAL;
 		goto free_skb;
 	}

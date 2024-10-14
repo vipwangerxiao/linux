@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * drivers/hwmon/nsa320-hwmon.c
  *
@@ -7,15 +8,6 @@
  * Copyright (C) 2016 Adam Baker <linux@baker-net.org.uk>
  * based on a board file driver
  * Copyright (C) 2012 Peter Schildmann <linux@schildmann.info>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License v2 as published by the
- * Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
  */
 
 #include <linux/bitops.h>
@@ -28,8 +20,6 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
-#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 
 /* Tests for error return values rely upon this value being < 0x80 */
@@ -201,7 +191,7 @@ static struct platform_driver nsa320_hwmon_driver = {
 	.probe = nsa320_hwmon_probe,
 	.driver = {
 		.name = "nsa320-hwmon",
-		.of_match_table = of_match_ptr(of_nsa320_hwmon_match),
+		.of_match_table = of_nsa320_hwmon_match,
 	},
 };
 

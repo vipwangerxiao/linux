@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * RTC client/driver for the Maxim/Dallas DS3232/DS3234 Real-Time Clock
  *
  * Copyright (C) 2009-2011 Freescale Semiconductor.
  * Author: Jack Lan <jack.lan@freescale.com>
  * Copyright (C) 2008 MIMOMax Wireless Ltd.
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -363,7 +359,7 @@ static const struct hwmon_channel_info ds3232_hwmon_temp = {
 	.config = ds3232_hwmon_temp_config,
 };
 
-static const struct hwmon_channel_info *ds3232_hwmon_info[] = {
+static const struct hwmon_channel_info * const ds3232_hwmon_info[] = {
 	&ds3232_hwmon_chip,
 	&ds3232_hwmon_temp,
 	NULL
@@ -410,11 +406,10 @@ static irqreturn_t ds3232_irq(int irq, void *dev_id)
 {
 	struct device *dev = dev_id;
 	struct ds3232 *ds3232 = dev_get_drvdata(dev);
-	struct mutex *lock = &ds3232->rtc->ops_lock;
 	int ret;
 	int stat, control;
 
-	mutex_lock(lock);
+	rtc_lock(ds3232->rtc);
 
 	ret = regmap_read(ds3232->regmap, DS3232_REG_SR, &stat);
 	if (ret)
@@ -452,7 +447,7 @@ static irqreturn_t ds3232_irq(int irq, void *dev_id)
 	}
 
 unlock:
-	mutex_unlock(lock);
+	rtc_unlock(ds3232->rtc);
 
 	return IRQ_HANDLED;
 }
@@ -522,7 +517,7 @@ static int ds3232_probe(struct device *dev, struct regmap *regmap, int irq,
 	if (IS_ERR(ds3232->rtc))
 		return PTR_ERR(ds3232->rtc);
 
-	ret = rtc_nvmem_register(ds3232->rtc, &nvmem_cfg);
+	ret = devm_rtc_nvmem_register(ds3232->rtc, &nvmem_cfg);
 	if(ret)
 		return ret;
 
@@ -540,6 +535,8 @@ static int ds3232_probe(struct device *dev, struct regmap *regmap, int irq,
 
 	return 0;
 }
+
+#if IS_ENABLED(CONFIG_I2C)
 
 #ifdef CONFIG_PM_SLEEP
 static int ds3232_suspend(struct device *dev)
@@ -569,10 +566,7 @@ static const struct dev_pm_ops ds3232_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(ds3232_suspend, ds3232_resume)
 };
 
-#if IS_ENABLED(CONFIG_I2C)
-
-static int ds3232_i2c_probe(struct i2c_client *client,
-			    const struct i2c_device_id *id)
+static int ds3232_i2c_probe(struct i2c_client *client)
 {
 	struct regmap *regmap;
 	static const struct regmap_config config = {
@@ -592,12 +586,12 @@ static int ds3232_i2c_probe(struct i2c_client *client,
 }
 
 static const struct i2c_device_id ds3232_id[] = {
-	{ "ds3232", 0 },
+	{ "ds3232" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, ds3232_id);
 
-static const struct of_device_id ds3232_of_match[] = {
+static const  __maybe_unused struct of_device_id ds3232_of_match[] = {
 	{ .compatible = "dallas,ds3232" },
 	{ }
 };

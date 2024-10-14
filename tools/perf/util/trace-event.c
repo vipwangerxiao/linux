@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-2.0
-
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -14,7 +13,6 @@
 #include <api/fs/fs.h>
 #include "trace-event.h"
 #include "machine.h"
-#include "util.h"
 
 /*
  * global trace_event object used by trace_event__tp_format

@@ -1,24 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Cryptographic API.
  *
  * SHA-3, as specified in
- * http://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.202.pdf
+ * https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.202.pdf
  *
  * SHA-3 code by Jeff Garzik <jeff@garzik.org>
  *               Ard Biesheuvel <ard.biesheuvel@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the Free
- * Software Foundation; either version 2 of the License, or (at your option)•
- * any later version.
- *
  */
 #include <crypto/internal/hash.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <crypto/sha3.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 /*
  * On some 32-bit architectures (h8300), GCC ends up using

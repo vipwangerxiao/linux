@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * 1-wire client/driver for the Maxim/Dallas DS2780 Stand-Alone Fuel Gauge IC
  *
@@ -6,11 +7,6 @@
  * Author: Clifton Barnes <cabarnes@indesign-llc.com>
  *
  * Based on ds2760_battery and ds2782_battery drivers
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 
 #include <linux/module.h>
@@ -164,7 +160,7 @@ static int ds2780_get_voltage(struct ds2780_device_info *dev_info,
 
 	/*
 	 * The voltage value is located in 10 bits across the voltage MSB
-	 * and LSB registers in two's compliment form
+	 * and LSB registers in two's complement form
 	 * Sign bit of the voltage value is in bit 7 of the voltage MSB register
 	 * Bits 9 - 3 of the voltage value are in bits 6 - 0 of the
 	 * voltage MSB register
@@ -192,7 +188,7 @@ static int ds2780_get_temperature(struct ds2780_device_info *dev_info,
 
 	/*
 	 * The temperature value is located in 10 bits across the temperature
-	 * MSB and LSB registers in two's compliment form
+	 * MSB and LSB registers in two's complement form
 	 * Sign bit of the temperature value is in bit 7 of the temperature
 	 * MSB register
 	 * Bits 9 - 3 of the temperature value are in bits 6 - 0 of the
@@ -245,7 +241,7 @@ static int ds2780_get_current(struct ds2780_device_info *dev_info,
 
 	/*
 	 * The current value is located in 16 bits across the current MSB
-	 * and LSB registers in two's compliment form
+	 * and LSB registers in two's complement form
 	 * Sign bit of the current value is in bit 7 of the current MSB register
 	 * Bits 14 - 8 of the current value are in bits 6 - 0 of the current
 	 * MSB register
@@ -458,7 +454,7 @@ static ssize_t ds2780_get_pmod_enabled(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	return sprintf(buf, "%d\n",
+	return sysfs_emit(buf, "%d\n",
 		 !!(control_reg & DS2780_CONTROL_REG_PMOD));
 }
 
@@ -511,7 +507,7 @@ static ssize_t ds2780_get_sense_resistor_value(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	ret = sprintf(buf, "%d\n", sense_resistor);
+	ret = sysfs_emit(buf, "%d\n", sense_resistor);
 	return ret;
 }
 
@@ -549,7 +545,7 @@ static ssize_t ds2780_get_rsgain_setting(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	return sprintf(buf, "%d\n", rsgain);
+	return sysfs_emit(buf, "%d\n", rsgain);
 }
 
 static ssize_t ds2780_set_rsgain_setting(struct device *dev,
@@ -592,7 +588,7 @@ static ssize_t ds2780_get_pio_pin(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	ret = sprintf(buf, "%d\n", sfr & DS2780_SFR_REG_PIOSC);
+	ret = sysfs_emit(buf, "%d\n", sfr & DS2780_SFR_REG_PIOSC);
 	return ret;
 }
 
@@ -628,7 +624,7 @@ static ssize_t ds2780_read_param_eeprom_bin(struct file *filp,
 				struct bin_attribute *bin_attr,
 				char *buf, loff_t off, size_t count)
 {
-	struct device *dev = container_of(kobj, struct device, kobj);
+	struct device *dev = kobj_to_dev(kobj);
 	struct power_supply *psy = to_power_supply(dev);
 	struct ds2780_device_info *dev_info = to_ds2780_device_info(psy);
 
@@ -641,7 +637,7 @@ static ssize_t ds2780_write_param_eeprom_bin(struct file *filp,
 				struct bin_attribute *bin_attr,
 				char *buf, loff_t off, size_t count)
 {
-	struct device *dev = container_of(kobj, struct device, kobj);
+	struct device *dev = kobj_to_dev(kobj);
 	struct power_supply *psy = to_power_supply(dev);
 	struct ds2780_device_info *dev_info = to_ds2780_device_info(psy);
 	int ret;
@@ -673,7 +669,7 @@ static ssize_t ds2780_read_user_eeprom_bin(struct file *filp,
 				struct bin_attribute *bin_attr,
 				char *buf, loff_t off, size_t count)
 {
-	struct device *dev = container_of(kobj, struct device, kobj);
+	struct device *dev = kobj_to_dev(kobj);
 	struct power_supply *psy = to_power_supply(dev);
 	struct ds2780_device_info *dev_info = to_ds2780_device_info(psy);
 
@@ -686,7 +682,7 @@ static ssize_t ds2780_write_user_eeprom_bin(struct file *filp,
 				struct bin_attribute *bin_attr,
 				char *buf, loff_t off, size_t count)
 {
-	struct device *dev = container_of(kobj, struct device, kobj);
+	struct device *dev = kobj_to_dev(kobj);
 	struct power_supply *psy = to_power_supply(dev);
 	struct ds2780_device_info *dev_info = to_ds2780_device_info(psy);
 	int ret;

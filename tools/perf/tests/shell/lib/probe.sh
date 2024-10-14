@@ -1,3 +1,5 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0
 # Arnaldo Carvalho de Melo <acme@kernel.org>, 2017
 
 skip_if_no_perf_probe() {

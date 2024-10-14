@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * lm87.c
  *
@@ -39,21 +40,7 @@
  * This driver also supports the ADM1024, a sensor chip made by Analog
  * Devices. That chip is fully compatible with the LM87. Complete
  * datasheet can be obtained from Analog's website at:
- *   http://www.analog.com/en/prod/0,2877,ADM1024,00.html
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *   https://www.analog.com/en/prod/0,2877,ADM1024,00.html
  */
 
 #include <linux/module.h>
@@ -154,7 +141,7 @@ static u8 LM87_REG_TEMP_LOW[3] = { 0x3A, 0x38, 0x2C };
 
 struct lm87_data {
 	struct mutex update_lock;
-	char valid; /* zero until following fields are valid */
+	bool valid; /* false until following fields are valid */
 	unsigned long last_updated; /* In jiffies */
 
 	u8 channel;		/* register value */
@@ -264,7 +251,7 @@ static struct lm87_data *lm87_update_device(struct device *dev)
 		data->aout = lm87_read_value(client, LM87_REG_AOUT);
 
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 	}
 
 	mutex_unlock(&data->update_lock);
@@ -846,7 +833,7 @@ static int lm87_detect(struct i2c_client *client, struct i2c_board_info *info)
 		return -ENODEV;
 	}
 
-	strlcpy(info->type, name, I2C_NAME_SIZE);
+	strscpy(info->type, name, I2C_NAME_SIZE);
 
 	return 0;
 }
@@ -925,7 +912,7 @@ static int lm87_init_client(struct i2c_client *client)
 	return 0;
 }
 
-static int lm87_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int lm87_probe(struct i2c_client *client)
 {
 	struct lm87_data *data;
 	struct device *hwmon_dev;
@@ -988,8 +975,8 @@ static int lm87_probe(struct i2c_client *client, const struct i2c_device_id *id)
  */
 
 static const struct i2c_device_id lm87_id[] = {
-	{ "lm87", 0 },
-	{ "adm1024", 0 },
+	{ "lm87" },
+	{ "adm1024" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, lm87_id);

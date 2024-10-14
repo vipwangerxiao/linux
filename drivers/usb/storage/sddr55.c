@@ -29,6 +29,7 @@
 MODULE_DESCRIPTION("Driver for SanDisk SDDR-55 SmartMedia reader");
 MODULE_AUTHOR("Simon Munton");
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS(USB_STORAGE);
 
 /*
  * The table of devices
@@ -39,7 +40,7 @@ MODULE_LICENSE("GPL");
 { USB_DEVICE_VER(id_vendor, id_product, bcdDeviceMin, bcdDeviceMax), \
   .driver_info = (flags) }
 
-static struct usb_device_id sddr55_usb_ids[] = {
+static const struct usb_device_id sddr55_usb_ids[] = {
 #	include "unusual_sddr55.h"
 	{ }		/* Terminating entry */
 };
@@ -61,7 +62,7 @@ MODULE_DEVICE_TABLE(usb, sddr55_usb_ids);
 	.initFunction = init_function,	\
 }
 
-static struct us_unusual_dev sddr55_unusual_dev_list[] = {
+static const struct us_unusual_dev sddr55_unusual_dev_list[] = {
 #	include "unusual_sddr55.h"
 	{ }		/* Terminating entry */
 };
@@ -195,7 +196,7 @@ static int sddr55_read_data(struct us_data *us,
 	unsigned char *buffer;
 
 	unsigned int pba;
-	unsigned long address;
+	unsigned int address;
 
 	unsigned short pages;
 	unsigned int len, offset;
@@ -315,7 +316,7 @@ static int sddr55_write_data(struct us_data *us,
 
 	unsigned int pba;
 	unsigned int new_pba;
-	unsigned long address;
+	unsigned int address;
 
 	unsigned short pages;
 	int i;
@@ -553,8 +554,8 @@ static int sddr55_reset(struct us_data *us)
 
 static unsigned long sddr55_get_capacity(struct us_data *us) {
 
-	unsigned char uninitialized_var(manufacturerID);
-	unsigned char uninitialized_var(deviceID);
+	unsigned char manufacturerID;
+	unsigned char deviceID;
 	int result;
 	struct sddr55_card_info *info = (struct sddr55_card_info *)us->extra;
 
@@ -591,7 +592,7 @@ static unsigned long sddr55_get_capacity(struct us_data *us) {
 	case 0x64:
 		info->pageshift = 8;
 		info->smallpageshift = 1;
-		/* fall through */
+		fallthrough;
 	case 0x5d: // 5d is a ROM card with pagesize 512.
 		return 0x00200000;
 

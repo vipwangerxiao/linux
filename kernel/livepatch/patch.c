@@ -1,22 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * patch.c - livepatch patching functions
  *
  * Copyright (C) 2014 Seth Jennings <sjenning@redhat.com>
  * Copyright (C) 2014 SUSE
  * Copyright (C) 2015 Josh Poimboeuf <jpoimboe@redhat.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -52,19 +40,24 @@ struct klp_ops *klp_find_ops(void *old_func)
 static void notrace klp_ftrace_handler(unsigned long ip,
 				       unsigned long parent_ip,
 				       struct ftrace_ops *fops,
-				       struct pt_regs *regs)
+				       struct ftrace_regs *fregs)
 {
 	struct klp_ops *ops;
 	struct klp_func *func;
 	int patch_state;
+	int bit;
 
 	ops = container_of(fops, struct klp_ops, fops);
 
 	/*
-	 * A variant of synchronize_rcu() is used to allow patching functions
-	 * where RCU is not watching, see klp_synchronize_transition().
+	 * The ftrace_test_recursion_trylock() will disable preemption,
+	 * which is required for the variant of synchronize_rcu() that is
+	 * used to allow patching functions where RCU is not watching.
+	 * See klp_synchronize_transition() for more details.
 	 */
-	preempt_disable_notrace();
+	bit = ftrace_test_recursion_trylock(ip, parent_ip);
+	if (WARN_ON_ONCE(bit < 0))
+		return;
 
 	func = list_first_or_null_rcu(&ops->func_stack, struct klp_func,
 				      stack_node);
@@ -102,9 +95,9 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 
 		patch_state = current->patch_state;
 
-		WARN_ON_ONCE(patch_state == KLP_UNDEFINED);
+		WARN_ON_ONCE(patch_state == KLP_TRANSITION_IDLE);
 
-		if (patch_state == KLP_UNPATCHED) {
+		if (patch_state == KLP_TRANSITION_UNPATCHED) {
 			/*
 			 * Use the previously patched version of the function.
 			 * If no previous patches exist, continue with the
@@ -125,24 +118,11 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 	if (func->nop)
 		goto unlock;
 
-	klp_arch_set_pc(regs, (unsigned long)func->new_func);
+	ftrace_regs_set_instruction_pointer(fregs, (unsigned long)func->new_func);
 
 unlock:
-	preempt_enable_notrace();
+	ftrace_test_recursion_unlock(bit);
 }
-
-/*
- * Convert a function address into the appropriate ftrace location.
- *
- * Usually this is just the address of the function, but on some architectures
- * it's more complicated so allow them to provide a custom behaviour.
- */
-#ifndef klp_get_ftrace_location
-static unsigned long klp_get_ftrace_location(unsigned long faddr)
-{
-	return faddr;
-}
-#endif
 
 static void klp_unpatch_func(struct klp_func *func)
 {
@@ -160,8 +140,7 @@ static void klp_unpatch_func(struct klp_func *func)
 	if (list_is_singular(&ops->func_stack)) {
 		unsigned long ftrace_loc;
 
-		ftrace_loc =
-			klp_get_ftrace_location((unsigned long)func->old_func);
+		ftrace_loc = ftrace_location((unsigned long)func->old_func);
 		if (WARN_ON(!ftrace_loc))
 			return;
 
@@ -193,8 +172,7 @@ static int klp_patch_func(struct klp_func *func)
 	if (!ops) {
 		unsigned long ftrace_loc;
 
-		ftrace_loc =
-			klp_get_ftrace_location((unsigned long)func->old_func);
+		ftrace_loc = ftrace_location((unsigned long)func->old_func);
 		if (!ftrace_loc) {
 			pr_err("failed to find location for function '%s'\n",
 				func->old_name);
@@ -206,9 +184,12 @@ static int klp_patch_func(struct klp_func *func)
 			return -ENOMEM;
 
 		ops->fops.func = klp_ftrace_handler;
-		ops->fops.flags = FTRACE_OPS_FL_SAVE_REGS |
-				  FTRACE_OPS_FL_DYNAMIC |
-				  FTRACE_OPS_FL_IPMODIFY;
+		ops->fops.flags = FTRACE_OPS_FL_DYNAMIC |
+#ifndef CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS
+				  FTRACE_OPS_FL_SAVE_REGS |
+#endif
+				  FTRACE_OPS_FL_IPMODIFY |
+				  FTRACE_OPS_FL_PERMANENT;
 
 		list_add(&ops->node, &klp_ops);
 

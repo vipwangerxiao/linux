@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2015 ST Microelectronics
  *
  * Author: Lee Jones <lee.jones@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/debugfs.h>
@@ -16,10 +12,12 @@
 #include <linux/kernel.h>
 #include <linux/mailbox_client.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/poll.h>
 #include <linux/slab.h>
+#include <linux/spinlock.h>
 #include <linux/uaccess.h>
 #include <linux/sched/signal.h>
 
@@ -42,6 +40,7 @@ struct mbox_test_device {
 	char			*signal;
 	char			*message;
 	spinlock_t		lock;
+	struct mutex		mutex;
 	wait_queue_head_t	waitq;
 	struct fasync_struct	*async_queue;
 	struct dentry		*root_debugfs_dir;
@@ -99,6 +98,7 @@ static ssize_t mbox_test_message_write(struct file *filp,
 				       size_t count, loff_t *ppos)
 {
 	struct mbox_test_device *tdev = filp->private_data;
+	char *message;
 	void *data;
 	int ret;
 
@@ -114,10 +114,13 @@ static ssize_t mbox_test_message_write(struct file *filp,
 		return -EINVAL;
 	}
 
-	tdev->message = kzalloc(MBOX_MAX_MSG_LEN, GFP_KERNEL);
-	if (!tdev->message)
+	message = kzalloc(MBOX_MAX_MSG_LEN, GFP_KERNEL);
+	if (!message)
 		return -ENOMEM;
 
+	mutex_lock(&tdev->mutex);
+
+	tdev->message = message;
 	ret = copy_from_user(tdev->message, userbuf, count);
 	if (ret) {
 		ret = -EFAULT;
@@ -147,6 +150,8 @@ out:
 	kfree(tdev->signal);
 	kfree(tdev->message);
 	tdev->signal = NULL;
+
+	mutex_unlock(&tdev->mutex);
 
 	return ret < 0 ? ret : count;
 }
@@ -362,8 +367,7 @@ static int mbox_test_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	/* It's okay for MMIO to be NULL */
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	tdev->tx_mmio = devm_ioremap_resource(&pdev->dev, res);
+	tdev->tx_mmio = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
 	if (PTR_ERR(tdev->tx_mmio) == -EBUSY) {
 		/* if reserved area in SRAM, try just ioremap */
 		size = resource_size(res);
@@ -373,8 +377,7 @@ static int mbox_test_probe(struct platform_device *pdev)
 	}
 
 	/* If specified, second reg entry is Rx MMIO */
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-	tdev->rx_mmio = devm_ioremap_resource(&pdev->dev, res);
+	tdev->rx_mmio = devm_platform_get_and_ioremap_resource(pdev, 1, &res);
 	if (PTR_ERR(tdev->rx_mmio) == -EBUSY) {
 		size = resource_size(res);
 		tdev->rx_mmio = devm_ioremap(&pdev->dev, res->start, size);
@@ -385,7 +388,7 @@ static int mbox_test_probe(struct platform_device *pdev)
 	tdev->tx_channel = mbox_test_request_channel(pdev, "tx");
 	tdev->rx_channel = mbox_test_request_channel(pdev, "rx");
 
-	if (!tdev->tx_channel && !tdev->rx_channel)
+	if (IS_ERR_OR_NULL(tdev->tx_channel) && IS_ERR_OR_NULL(tdev->rx_channel))
 		return -EPROBE_DEFER;
 
 	/* If Rx is not specified but has Rx MMIO, then Rx = Tx */
@@ -396,6 +399,7 @@ static int mbox_test_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, tdev);
 
 	spin_lock_init(&tdev->lock);
+	mutex_init(&tdev->mutex);
 
 	if (tdev->rx_channel) {
 		tdev->rx_buffer = devm_kzalloc(&pdev->dev,
@@ -414,7 +418,7 @@ static int mbox_test_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int mbox_test_remove(struct platform_device *pdev)
+static void mbox_test_remove(struct platform_device *pdev)
 {
 	struct mbox_test_device *tdev = platform_get_drvdata(pdev);
 
@@ -424,8 +428,6 @@ static int mbox_test_remove(struct platform_device *pdev)
 		mbox_free_channel(tdev->tx_channel);
 	if (tdev->rx_channel)
 		mbox_free_channel(tdev->rx_channel);
-
-	return 0;
 }
 
 static const struct of_device_id mbox_test_match[] = {
@@ -440,7 +442,7 @@ static struct platform_driver mbox_test_driver = {
 		.of_match_table = mbox_test_match,
 	},
 	.probe  = mbox_test_probe,
-	.remove = mbox_test_remove,
+	.remove_new = mbox_test_remove,
 };
 module_platform_driver(mbox_test_driver);
 

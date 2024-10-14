@@ -11,8 +11,8 @@
  * Larry Finger <Larry.Finger@lwfinger.net>
  *
  ******************************************************************************/
-#ifndef _IO_H_
-#define _IO_H_
+#ifndef _RTL871X_IO_H_
+#define _RTL871X_IO_H_
 
 #include "osdep_service.h"
 #include "osdep_intf.h"
@@ -62,7 +62,7 @@
 #define IO_WR_BURST(x)		(IO_WRITE_ | _IO_SYNC_ | _IO_BURST_ | \
 				((x) & _IOSZ_MASK_))
 #define IO_RD_BURST(x)		(_IO_SYNC_ | _IO_BURST_ | ((x) & _IOSZ_MASK_))
-/*below is for the intf_option bit defition...*/
+/*below is for the intf_option bit definition...*/
 #define _INTF_ASYNC_	BIT(0)	/*support async io*/
 struct intf_priv;
 struct	intf_hdl;
@@ -123,7 +123,6 @@ struct	intf_hdl {
 };
 
 struct reg_protocol_rd {
-
 #ifdef __LITTLE_ENDIAN
 	/* DW1 */
 	u32		NumOfTrans:4;
@@ -234,5 +233,4 @@ void r8712_write_port(struct _adapter *adapter, u32 addr, u32 cnt, u8 *pmem);
 uint r8712_alloc_io_queue(struct _adapter *adapter);
 void r8712_free_io_queue(struct _adapter *adapter);
 
-#endif	/*_RTL8711_IO_H_*/
-
+#endif	/*_RTL871X_IO_H_*/

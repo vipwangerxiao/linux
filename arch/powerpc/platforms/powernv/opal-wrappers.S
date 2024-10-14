@@ -1,12 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * PowerNV OPAL API wrappers
  *
  * Copyright 2011 IBM Corp.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #include <linux/jump_label.h>
@@ -61,7 +57,7 @@ opal_return:
 	.long 0xa64b7b7d /* mthsrr1 r11				*/
 	.long 0x2402004c /* hrfid				*/
 #endif
-	ld	r2,PACATOC(r13)
+	LOAD_PACA_TOC()
 	ld	r0,PPC_LR_STKOFF(r1)
 	mtlr	r0
 	blr

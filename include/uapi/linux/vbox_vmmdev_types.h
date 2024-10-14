@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: (GPL-2.0 OR CDDL-1.0) */
+/* SPDX-License-Identifier: ((GPL-2.0 WITH Linux-syscall-note) OR CDDL-1.0) */
 /*
  * Virtual Device for Guest <-> VMM/Host communication, type definitions
  * which are also used for the vboxguest ioctl interface / by vboxsf
@@ -63,6 +63,7 @@ enum vmmdev_request_type {
 	VMMDEVREQ_SET_GUEST_CAPABILITIES       = 56,
 	VMMDEVREQ_VIDEMODE_SUPPORTED2          = 57, /* since version 3.2.0 */
 	VMMDEVREQ_GET_DISPLAY_CHANGE_REQEX     = 80, /* since version 4.2.4 */
+	VMMDEVREQ_GET_DISPLAY_CHANGE_REQ_MULTI = 81,
 	VMMDEVREQ_HGCM_CONNECT                 = 60,
 	VMMDEVREQ_HGCM_DISCONNECT              = 61,
 	VMMDEVREQ_HGCM_CALL32                  = 62,
@@ -92,6 +93,8 @@ enum vmmdev_request_type {
 	VMMDEVREQ_WRITE_COREDUMP               = 218,
 	VMMDEVREQ_GUEST_HEARTBEAT              = 219,
 	VMMDEVREQ_HEARTBEAT_CONFIGURE          = 220,
+	VMMDEVREQ_NT_BUG_CHECK                 = 221,
+	VMMDEVREQ_VIDEO_UPDATE_MONITOR_POSITIONS = 222,
 	/* Ensure the enum is a 32 bit data-type */
 	VMMDEVREQ_SIZEHACK                     = 0x7fffffff
 };
@@ -279,7 +282,10 @@ struct vmmdev_hgcm_pagelist {
 	__u32 flags;             /** VMMDEV_HGCM_F_PARM_*. */
 	__u16 offset_first_page; /** Data offset in the first page. */
 	__u16 page_count;        /** Number of pages. */
-	__u64 pages[1];          /** Page addresses. */
+	union {
+		__u64 unused;	/** Deprecated place-holder for first "pages" entry. */
+		__DECLARE_FLEX_ARRAY(__u64, pages); /** Page addresses. */
+	};
 };
 VMMDEV_ASSERT_SIZE(vmmdev_hgcm_pagelist, 4 + 2 + 2 + 8);
 

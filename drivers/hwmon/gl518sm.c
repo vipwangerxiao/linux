@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * gl518sm.c - Part of lm_sensors, Linux kernel modules for hardware
  *             monitoring
@@ -5,20 +6,6 @@
  * Kyosti Malkki <kmalkki@cc.hut.fi>
  * Copyright (C) 2004 Hong-Gunn Chew <hglinux@gunnet.org> and
  * Jean Delvare <jdelvare@suse.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  *
  * Ported to Linux 2.6 by Hong-Gunn Chew with the help of Jean Delvare
  * and advice of Greg Kroah-Hartman.
@@ -120,7 +107,7 @@ struct gl518_data {
 	enum chips type;
 
 	struct mutex update_lock;
-	char valid;		/* !=0 if following fields are valid */
+	bool valid;		/* true if following fields are valid */
 	unsigned long last_updated;	/* In jiffies */
 
 	u8 voltage_in[4];	/* Register values; [0] = VDD */
@@ -224,7 +211,7 @@ static struct gl518_data *gl518_update_device(struct device *dev)
 		    gl518_read_value(client, GL518_REG_VIN3);
 
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 	}
 
 	mutex_unlock(&data->update_lock);
@@ -599,7 +586,7 @@ static int gl518_detect(struct i2c_client *client, struct i2c_board_info *info)
 	if (rev != 0x00 && rev != 0x80)
 		return -ENODEV;
 
-	strlcpy(info->type, "gl518sm", I2C_NAME_SIZE);
+	strscpy(info->type, "gl518sm", I2C_NAME_SIZE);
 
 	return 0;
 }
@@ -624,8 +611,7 @@ static void gl518_init_client(struct i2c_client *client)
 	gl518_write_value(client, GL518_REG_CONF, 0x40 | regvalue);
 }
 
-static int gl518_probe(struct i2c_client *client,
-		       const struct i2c_device_id *id)
+static int gl518_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
@@ -656,7 +642,7 @@ static int gl518_probe(struct i2c_client *client,
 }
 
 static const struct i2c_device_id gl518_id[] = {
-	{ "gl518sm", 0 },
+	{ "gl518sm" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, gl518_id);

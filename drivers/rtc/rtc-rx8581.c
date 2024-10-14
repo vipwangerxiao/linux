@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * An I2C driver for the Epson RX8581 RTC
  *
  * Author: Martyn Welch <martyn.welch@ge.com>
  * Copyright 2008 GE Intelligent Platforms Embedded Systems, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Based on: rtc-pcf8563.c (An I2C driver for the Philips PCF8563 RTC)
  * Copyright 2005-06 Tower Technologies
@@ -16,7 +13,6 @@
 #include <linux/i2c.h>
 #include <linux/bcd.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/regmap.h>
 #include <linux/rtc.h>
 #include <linux/log2.h>
@@ -251,8 +247,7 @@ static const struct rx85x1_config rx8571_config = {
 	.num_nvram = 2
 };
 
-static int rx8581_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int rx8581_probe(struct i2c_client *client)
 {
 	struct rx8581 *rx8581;
 	const struct rx85x1_config *config = &rx8581_config;
@@ -301,23 +296,23 @@ static int rx8581_probe(struct i2c_client *client,
 	rx8581->rtc->start_secs = 0;
 	rx8581->rtc->set_start_time = true;
 
-	ret = rtc_register_device(rx8581->rtc);
+	ret = devm_rtc_register_device(rx8581->rtc);
 
 	for (i = 0; i < config->num_nvram; i++) {
 		nvmem_cfg[i].priv = rx8581;
-		rtc_nvmem_register(rx8581->rtc, &nvmem_cfg[i]);
+		devm_rtc_nvmem_register(rx8581->rtc, &nvmem_cfg[i]);
 	}
 
 	return ret;
 }
 
 static const struct i2c_device_id rx8581_id[] = {
-	{ "rx8581", 0 },
+	{ "rx8581" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, rx8581_id);
 
-static const struct of_device_id rx8581_of_match[] = {
+static const __maybe_unused struct of_device_id rx8581_of_match[] = {
 	{ .compatible = "epson,rx8571", .data = &rx8571_config },
 	{ .compatible = "epson,rx8581", .data = &rx8581_config },
 	{ /* sentinel */ }

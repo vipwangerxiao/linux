@@ -1,10 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright (c) 2014-2015 Hisilicon Limited.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #ifndef __HNS_DSAF_MAIN_H
@@ -214,7 +210,7 @@ struct hnae_vf_cb {
 	u8 port_index;
 	struct hns_mac_cb *mac_cb;
 	struct dsaf_device *dsaf_dev;
-	struct hnae_handle  ae_handle; /* must be the last number */
+	struct hnae_handle  ae_handle; /* must be the last member */
 };
 
 struct dsaf_int_xge_src {

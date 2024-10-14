@@ -57,14 +57,13 @@
 #include <linux/console.h>
 #include <linux/of_graph.h>
 #include <linux/regulator/consumer.h>
+#include <linux/soc/pxa/cpu.h>
 #include <video/of_display_timing.h>
 #include <video/videomode.h>
 
-#include <mach/hardware.h>
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/div64.h>
-#include <mach/bitfield.h>
 #include <linux/platform_data/video-pxafb.h>
 
 /*
@@ -73,6 +72,7 @@
 #define DEBUG_VAR 1
 
 #include "pxafb.h"
+#include "pxa3xx-regs.h"
 
 /* Bits which should not be set in machine configuration structures */
 #define LCCR0_INVALID_CONFIG_MASK	(LCCR0_OUM | LCCR0_BM | LCCR0_QDM |\
@@ -597,15 +597,13 @@ static int pxafb_blank(int blank, struct fb_info *info)
 	return 0;
 }
 
-static struct fb_ops pxafb_ops = {
+static const struct fb_ops pxafb_ops = {
 	.owner		= THIS_MODULE,
+	FB_DEFAULT_IOMEM_OPS,
 	.fb_check_var	= pxafb_check_var,
 	.fb_set_par	= pxafb_set_par,
 	.fb_pan_display	= pxafb_pan_display,
 	.fb_setcolreg	= pxafb_setcolreg,
-	.fb_fillrect	= cfb_fillrect,
-	.fb_copyarea	= cfb_copyarea,
-	.fb_imageblit	= cfb_imageblit,
 	.fb_blank	= pxafb_blank,
 };
 
@@ -865,7 +863,7 @@ static int overlayfb_set_par(struct fb_info *info)
 	return 0;
 }
 
-static struct fb_ops overlay_fb_ops = {
+static const struct fb_ops overlay_fb_ops = {
 	.owner			= THIS_MODULE,
 	.fb_open		= overlayfb_open,
 	.fb_release		= overlayfb_release,
@@ -888,7 +886,6 @@ static void init_pxafb_overlay(struct pxafb_info *fbi, struct pxafb_layer *ofb,
 	ofb->fb.var.vmode		= FB_VMODE_NONINTERLACED;
 
 	ofb->fb.fbops			= &overlay_fb_ops;
-	ofb->fb.flags			= FBINFO_FLAG_DEFAULT;
 	ofb->fb.node			= -1;
 	ofb->fb.pseudo_palette		= NULL;
 
@@ -1614,7 +1611,7 @@ static void set_ctrlr_state(struct pxafb_info *fbi, u_int state)
 		 */
 		if (old_state != C_DISABLE_PM)
 			break;
-		/* fall through */
+		fallthrough;
 
 	case C_ENABLE:
 		/*
@@ -1674,24 +1671,6 @@ pxafb_freq_transition(struct notifier_block *nb, unsigned long val, void *data)
 		fbi->reg_lccr3 = (fbi->reg_lccr3 & ~0xff) |
 				  LCCR3_PixClkDiv(pcd);
 		set_ctrlr_state(fbi, C_ENABLE_CLKCHANGE);
-		break;
-	}
-	return 0;
-}
-
-static int
-pxafb_freq_policy(struct notifier_block *nb, unsigned long val, void *data)
-{
-	struct pxafb_info *fbi = TO_INF(nb, freq_policy);
-	struct fb_var_screeninfo *var = &fbi->fb.var;
-	struct cpufreq_policy *policy = data;
-
-	switch (val) {
-	case CPUFREQ_ADJUST:
-		pr_debug("min dma period: %d ps, "
-			"new clock %d kHz\n", pxafb_display_dma_period(var),
-			policy->max);
-		/* TODO: fill in min/max values */
 		break;
 	}
 	return 0;
@@ -1844,7 +1823,6 @@ static struct pxafb_info *pxafb_init_fbinfo(struct device *dev,
 	fbi->fb.var.vmode	= FB_VMODE_NONINTERLACED;
 
 	fbi->fb.fbops		= &pxafb_ops;
-	fbi->fb.flags		= FBINFO_DEFAULT;
 	fbi->fb.node		= -1;
 
 	addr = fbi;
@@ -2060,7 +2038,7 @@ static int __init pxafb_setup_options(void)
 		return -ENODEV;
 
 	if (options)
-		strlcpy(g_options, options, sizeof(g_options));
+		strscpy(g_options, options, sizeof(g_options));
 
 	return 0;
 }
@@ -2068,7 +2046,7 @@ static int __init pxafb_setup_options(void)
 #define pxafb_setup_options()		(0)
 
 module_param_string(options, g_options, sizeof(g_options), 0);
-MODULE_PARM_DESC(options, "LCD parameters (see Documentation/fb/pxafb.txt)");
+MODULE_PARM_DESC(options, "LCD parameters (see Documentation/fb/pxafb.rst)");
 #endif
 
 #else
@@ -2193,7 +2171,7 @@ static int of_get_pxafb_mode_info(struct device *dev,
 	u32 bus_width;
 	int ret, i;
 
-	np = of_graph_get_next_endpoint(dev->of_node, NULL);
+	np = of_graph_get_endpoint_by_regs(dev->of_node, 0, -1);
 	if (!np) {
 		dev_err(dev, "could not find endpoint\n");
 		return -EINVAL;
@@ -2255,7 +2233,6 @@ static int pxafb_probe(struct platform_device *dev)
 {
 	struct pxafb_info *fbi;
 	struct pxafb_mach_info *inf, *pdata;
-	struct resource *r;
 	int i, irq, ret;
 
 	dev_dbg(&dev->dev, "pxafb_probe\n");
@@ -2275,10 +2252,10 @@ static int pxafb_probe(struct platform_device *dev)
 			goto failed;
 		for (i = 0; i < inf->num_modes; i++)
 			inf->modes[i] = pdata->modes[i];
+	} else {
+		inf = of_pxafb_of_mach_info(&dev->dev);
 	}
 
-	if (!pdata)
-		inf = of_pxafb_of_mach_info(&dev->dev);
 	if (IS_ERR_OR_NULL(inf))
 		goto failed;
 
@@ -2321,17 +2298,10 @@ static int pxafb_probe(struct platform_device *dev)
 		fbi->lcd_supply = NULL;
 	}
 
-	r = platform_get_resource(dev, IORESOURCE_MEM, 0);
-	if (r == NULL) {
-		dev_err(&dev->dev, "no I/O memory resource defined\n");
-		ret = -ENODEV;
-		goto failed;
-	}
-
-	fbi->mmio_base = devm_ioremap_resource(&dev->dev, r);
+	fbi->mmio_base = devm_platform_ioremap_resource(dev, 0);
 	if (IS_ERR(fbi->mmio_base)) {
 		dev_err(&dev->dev, "failed to get I/O memory\n");
-		ret = -EBUSY;
+		ret = PTR_ERR(fbi->mmio_base);
 		goto failed;
 	}
 
@@ -2353,7 +2323,6 @@ static int pxafb_probe(struct platform_device *dev)
 
 	irq = platform_get_irq(dev, 0);
 	if (irq < 0) {
-		dev_err(&dev->dev, "no IRQ defined\n");
 		ret = -ENODEV;
 		goto failed_free_mem;
 	}
@@ -2400,11 +2369,8 @@ static int pxafb_probe(struct platform_device *dev)
 
 #ifdef CONFIG_CPU_FREQ
 	fbi->freq_transition.notifier_call = pxafb_freq_transition;
-	fbi->freq_policy.notifier_call = pxafb_freq_policy;
 	cpufreq_register_notifier(&fbi->freq_transition,
 				CPUFREQ_TRANSITION_NOTIFIER);
-	cpufreq_register_notifier(&fbi->freq_policy,
-				CPUFREQ_POLICY_NOTIFIER);
 #endif
 
 	/*
@@ -2426,17 +2392,18 @@ failed:
 	return ret;
 }
 
-static int pxafb_remove(struct platform_device *dev)
+static void pxafb_remove(struct platform_device *dev)
 {
 	struct pxafb_info *fbi = platform_get_drvdata(dev);
 	struct fb_info *info;
 
 	if (!fbi)
-		return 0;
+		return;
 
 	info = &fbi->fb;
 
 	pxafb_overlay_exit(fbi);
+	cancel_work_sync(&fbi->task);
 	unregister_framebuffer(info);
 
 	pxafb_disable_controller(fbi);
@@ -2446,10 +2413,8 @@ static int pxafb_remove(struct platform_device *dev)
 
 	free_pages_exact(fbi->video_mem, fbi->video_mem_size);
 
-	dma_free_wc(&dev->dev, fbi->dma_buff_size, fbi->dma_buff,
-		    fbi->dma_buff_phys);
-
-	return 0;
+	dma_free_coherent(&dev->dev, fbi->dma_buff_size, fbi->dma_buff,
+			  fbi->dma_buff_phys);
 }
 
 static const struct of_device_id pxafb_of_dev_id[] = {
@@ -2462,7 +2427,7 @@ MODULE_DEVICE_TABLE(of, pxafb_of_dev_id);
 
 static struct platform_driver pxafb_driver = {
 	.probe		= pxafb_probe,
-	.remove 	= pxafb_remove,
+	.remove		= pxafb_remove,
 	.driver		= {
 		.name	= "pxa2xx-fb",
 		.of_match_table = pxafb_of_dev_id,

@@ -19,6 +19,9 @@
  * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#ifndef _UAPI_LINUX_CRYPTOUSER_H
+#define _UAPI_LINUX_CRYPTOUSER_H
+
 #include <linux/types.h>
 
 /* Netlink configuration messages.  */
@@ -29,7 +32,7 @@ enum {
 	CRYPTO_MSG_UPDATEALG,
 	CRYPTO_MSG_GETALG,
 	CRYPTO_MSG_DELRNG,
-	CRYPTO_MSG_GETSTAT,
+	CRYPTO_MSG_GETSTAT, /* No longer supported, do not use. */
 	__CRYPTO_MSG_MAX
 };
 #define CRYPTO_MSG_MAX (__CRYPTO_MSG_MAX - 1)
@@ -51,16 +54,16 @@ enum crypto_attr_type_t {
 	CRYPTOCFGA_REPORT_AKCIPHER,	/* struct crypto_report_akcipher */
 	CRYPTOCFGA_REPORT_KPP,		/* struct crypto_report_kpp */
 	CRYPTOCFGA_REPORT_ACOMP,	/* struct crypto_report_acomp */
-	CRYPTOCFGA_STAT_LARVAL,		/* struct crypto_stat */
-	CRYPTOCFGA_STAT_HASH,		/* struct crypto_stat */
-	CRYPTOCFGA_STAT_BLKCIPHER,	/* struct crypto_stat */
-	CRYPTOCFGA_STAT_AEAD,		/* struct crypto_stat */
-	CRYPTOCFGA_STAT_COMPRESS,	/* struct crypto_stat */
-	CRYPTOCFGA_STAT_RNG,		/* struct crypto_stat */
-	CRYPTOCFGA_STAT_CIPHER,		/* struct crypto_stat */
-	CRYPTOCFGA_STAT_AKCIPHER,	/* struct crypto_stat */
-	CRYPTOCFGA_STAT_KPP,		/* struct crypto_stat */
-	CRYPTOCFGA_STAT_ACOMP,		/* struct crypto_stat */
+	CRYPTOCFGA_STAT_LARVAL,		/* No longer supported, do not use. */
+	CRYPTOCFGA_STAT_HASH,		/* No longer supported, do not use. */
+	CRYPTOCFGA_STAT_BLKCIPHER,	/* No longer supported, do not use. */
+	CRYPTOCFGA_STAT_AEAD,		/* No longer supported, do not use. */
+	CRYPTOCFGA_STAT_COMPRESS,	/* No longer supported, do not use. */
+	CRYPTOCFGA_STAT_RNG,		/* No longer supported, do not use. */
+	CRYPTOCFGA_STAT_CIPHER,		/* No longer supported, do not use. */
+	CRYPTOCFGA_STAT_AKCIPHER,	/* No longer supported, do not use. */
+	CRYPTOCFGA_STAT_KPP,		/* No longer supported, do not use. */
+	CRYPTOCFGA_STAT_ACOMP,		/* No longer supported, do not use. */
 	__CRYPTOCFGA_MAX
 
 #define CRYPTOCFGA_MAX (__CRYPTOCFGA_MAX - 1)
@@ -76,6 +79,7 @@ struct crypto_user_alg {
 	__u32 cru_flags;
 };
 
+/* No longer supported, do not use. */
 struct crypto_stat_aead {
 	char type[CRYPTO_MAX_NAME];
 	__u64 stat_encrypt_cnt;
@@ -85,6 +89,7 @@ struct crypto_stat_aead {
 	__u64 stat_err_cnt;
 };
 
+/* No longer supported, do not use. */
 struct crypto_stat_akcipher {
 	char type[CRYPTO_MAX_NAME];
 	__u64 stat_encrypt_cnt;
@@ -96,6 +101,7 @@ struct crypto_stat_akcipher {
 	__u64 stat_err_cnt;
 };
 
+/* No longer supported, do not use. */
 struct crypto_stat_cipher {
 	char type[CRYPTO_MAX_NAME];
 	__u64 stat_encrypt_cnt;
@@ -105,6 +111,7 @@ struct crypto_stat_cipher {
 	__u64 stat_err_cnt;
 };
 
+/* No longer supported, do not use. */
 struct crypto_stat_compress {
 	char type[CRYPTO_MAX_NAME];
 	__u64 stat_compress_cnt;
@@ -114,6 +121,7 @@ struct crypto_stat_compress {
 	__u64 stat_err_cnt;
 };
 
+/* No longer supported, do not use. */
 struct crypto_stat_hash {
 	char type[CRYPTO_MAX_NAME];
 	__u64 stat_hash_cnt;
@@ -121,6 +129,7 @@ struct crypto_stat_hash {
 	__u64 stat_err_cnt;
 };
 
+/* No longer supported, do not use. */
 struct crypto_stat_kpp {
 	char type[CRYPTO_MAX_NAME];
 	__u64 stat_setsecret_cnt;
@@ -129,6 +138,7 @@ struct crypto_stat_kpp {
 	__u64 stat_err_cnt;
 };
 
+/* No longer supported, do not use. */
 struct crypto_stat_rng {
 	char type[CRYPTO_MAX_NAME];
 	__u64 stat_generate_cnt;
@@ -137,6 +147,7 @@ struct crypto_stat_rng {
 	__u64 stat_err_cnt;
 };
 
+/* No longer supported, do not use. */
 struct crypto_stat_larval {
 	char type[CRYPTO_MAX_NAME];
 };
@@ -198,3 +209,5 @@ struct crypto_report_acomp {
 
 #define CRYPTO_REPORT_MAXSIZE (sizeof(struct crypto_user_alg) + \
 			       sizeof(struct crypto_report_blkcipher))
+
+#endif /* _UAPI_LINUX_CRYPTOUSER_H */

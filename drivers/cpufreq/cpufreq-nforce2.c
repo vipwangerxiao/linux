@@ -1,7 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * (C) 2004-2006  Sebastian Witt <se.witt@gmx.net>
  *
- *  Licensed under the terms of the GNU GPL License version 2.
  *  Based upon reverse engineered information
  *
  *  BIG FAT DISCLAIMER: Work in progress code. Possibly *dangerous*
@@ -291,7 +291,7 @@ static int nforce2_target(struct cpufreq_policy *policy,
  * nforce2_verify - verifies a new CPUFreq policy
  * @policy: new policy
  */
-static int nforce2_verify(struct cpufreq_policy *policy)
+static int nforce2_verify(struct cpufreq_policy_data *policy)
 {
 	unsigned int fsb_pol_max;
 
@@ -359,11 +359,6 @@ static int nforce2_cpu_init(struct cpufreq_policy *policy)
 	return 0;
 }
 
-static int nforce2_cpu_exit(struct cpufreq_policy *policy)
-{
-	return 0;
-}
-
 static struct cpufreq_driver nforce2_driver = {
 	.name = "nforce2",
 	.flags = CPUFREQ_NO_AUTO_DYNAMIC_SWITCHING,
@@ -371,7 +366,6 @@ static struct cpufreq_driver nforce2_driver = {
 	.target = nforce2_target,
 	.get = nforce2_get,
 	.init = nforce2_cpu_init,
-	.exit = nforce2_cpu_exit,
 };
 
 #ifdef MODULE

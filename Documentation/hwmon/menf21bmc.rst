@@ -7,7 +7,7 @@ Supported chips:
 
 	  Prefix: 'menf21bmc_hwmon'
 
-	  Adresses scanned: -
+	  Addresses scanned: -
 
 Author: Andreas Werner <andreas.werner@men.de>
 
@@ -28,7 +28,7 @@ Usage Notes
 This driver is part of the MFD driver named "menf21bmc" and does
 not auto-detect devices.
 You will have to instantiate the MFD driver explicitly.
-Please see Documentation/i2c/instantiating-devices for
+Please see Documentation/i2c/instantiating-devices.rst for
 details.
 
 Sysfs entries

@@ -1,20 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * This file is part of UBIFS.
  *
  * Copyright (C) 2006-2008 Nokia Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 51
- * Franklin St, Fifth Floor, Boston, MA 02110-1301 USA
  *
  * Authors: Adrian Hunter
  *          Artem Bityutskiy (Битюцкий Артём)
@@ -35,13 +23,13 @@
 #include "ubifs.h"
 #include <linux/list_sort.h>
 #include <crypto/hash.h>
-#include <crypto/algapi.h>
 
 /**
  * struct replay_entry - replay list entry.
  * @lnum: logical eraseblock number of the node
  * @offs: node offset
  * @len: node length
+ * @hash: node hash
  * @deletion: non-zero if this entry corresponds to a node deletion
  * @sqnum: node sequence number
  * @list: links the replay list
@@ -118,7 +106,7 @@ static int set_bud_lprops(struct ubifs_info *c, struct bud_entry *b)
 		 * property values should be @lp->free == @c->leb_size and
 		 * @lp->dirty == 0, but that is not the case. The reason is that
 		 * the LEB had been garbage collected before it became the bud,
-		 * and there was not commit inbetween. The garbage collector
+		 * and there was no commit in between. The garbage collector
 		 * resets the free and dirty space without recording it
 		 * anywhere except lprops, so if there was no commit then
 		 * lprops does not have that information.
@@ -235,7 +223,8 @@ static bool inode_still_linked(struct ubifs_info *c, struct replay_entry *rino)
 	 */
 	list_for_each_entry_reverse(r, &c->replay_list, list) {
 		ubifs_assert(c, r->sqnum >= rino->sqnum);
-		if (key_inum(c, &r->key) == key_inum(c, &rino->key))
+		if (key_inum(c, &r->key) == key_inum(c, &rino->key) &&
+		    key_type(c, &r->key) == UBIFS_INO_KEY)
 			return r->deletion == 0;
 
 	}
@@ -307,11 +296,11 @@ static int apply_replay_entry(struct ubifs_info *c, struct replay_entry *r)
  * @b: second replay entry
  *
  * This is a comparios function for 'list_sort()' which compares 2 replay
- * entries @a and @b by comparing their sequence numer.  Returns %1 if @a has
+ * entries @a and @b by comparing their sequence number.  Returns %1 if @a has
  * greater sequence number and %-1 otherwise.
  */
-static int replay_entries_cmp(void *priv, struct list_head *a,
-			      struct list_head *b)
+static int replay_entries_cmp(void *priv, const struct list_head *a,
+			      const struct list_head *b)
 {
 	struct ubifs_info *c = priv;
 	struct replay_entry *ra, *rb;
@@ -377,6 +366,7 @@ static void destroy_replay_list(struct ubifs_info *c)
  * @lnum: node logical eraseblock number
  * @offs: node offset
  * @len: node length
+ * @hash: node hash
  * @key: node key
  * @sqnum: sequence number
  * @deletion: non-zero if this is a deletion
@@ -429,6 +419,7 @@ static int insert_node(struct ubifs_info *c, int lnum, int offs, int len,
  * @lnum: node logical eraseblock number
  * @offs: node offset
  * @len: node length
+ * @hash: node hash
  * @key: node key
  * @name: directory entry name
  * @nlen: directory entry name length
@@ -570,8 +561,10 @@ static int is_last_bud(struct ubifs_info *c, struct ubifs_bud *bud)
 	return data == 0xFFFFFFFF;
 }
 
-/* authenticate_sleb_hash and authenticate_sleb_hmac are split out for stack usage */
-static int authenticate_sleb_hash(struct ubifs_info *c, struct shash_desc *log_hash, u8 *hash)
+/* authenticate_sleb_hash is split out for stack usage */
+static int noinline_for_stack
+authenticate_sleb_hash(struct ubifs_info *c,
+		       struct shash_desc *log_hash, u8 *hash)
 {
 	SHASH_DESC_ON_STACK(hash_desc, c->hash_tfm);
 
@@ -581,21 +574,12 @@ static int authenticate_sleb_hash(struct ubifs_info *c, struct shash_desc *log_h
 	return crypto_shash_final(hash_desc, hash);
 }
 
-static int authenticate_sleb_hmac(struct ubifs_info *c, u8 *hash, u8 *hmac)
-{
-	SHASH_DESC_ON_STACK(hmac_desc, c->hmac_tfm);
-
-	hmac_desc->tfm = c->hmac_tfm;
-
-	return crypto_shash_digest(hmac_desc, hash, c->hash_len, hmac);
-}
-
 /**
  * authenticate_sleb - authenticate one scan LEB
  * @c: UBIFS file-system description object
  * @sleb: the scan LEB to authenticate
  * @log_hash:
- * @is_last: if true, this is is the last LEB
+ * @is_last: if true, this is the last LEB
  *
  * This function iterates over the buds of a single LEB authenticating all buds
  * with the authentication nodes on this LEB. Authentication nodes are written
@@ -613,17 +597,11 @@ static int authenticate_sleb(struct ubifs_info *c, struct ubifs_scan_leb *sleb,
 	struct ubifs_scan_node *snod;
 	int n_nodes = 0;
 	int err;
-	u8 *hash, *hmac;
+	u8 hash[UBIFS_HASH_ARR_SZ];
+	u8 hmac[UBIFS_HMAC_ARR_SZ];
 
 	if (!ubifs_authenticated(c))
 		return sleb->nodes_cnt;
-
-	hash = kmalloc(crypto_shash_descsize(c->hash_tfm), GFP_NOFS);
-	hmac = kmalloc(c->hmac_desc_len, GFP_NOFS);
-	if (!hash || !hmac) {
-		err = -ENOMEM;
-		goto out;
-	}
 
 	list_for_each_entry(snod, &sleb->nodes, list) {
 
@@ -636,7 +614,8 @@ static int authenticate_sleb(struct ubifs_info *c, struct ubifs_scan_leb *sleb,
 			if (err)
 				goto out;
 
-			err = authenticate_sleb_hmac(c, hash, hmac);
+			err = crypto_shash_tfm_digest(c->hmac_tfm, hash,
+						      c->hash_len, hmac);
 			if (err)
 				goto out;
 
@@ -674,9 +653,6 @@ static int authenticate_sleb(struct ubifs_info *c, struct ubifs_scan_leb *sleb,
 		err = 0;
 	}
 out:
-	kfree(hash);
-	kfree(hmac);
-
 	return err ? err : n_nodes - n_not_auth;
 }
 
@@ -856,7 +832,7 @@ out:
 
 out_dump:
 	ubifs_err(c, "bad node is at LEB %d:%d", lnum, snod->offs);
-	ubifs_dump_node(c, snod->node);
+	ubifs_dump_node(c, snod->node, c->leb_size - snod->offs);
 	ubifs_scan_destroy(sleb);
 	return -EINVAL;
 }
@@ -960,8 +936,6 @@ out:
  * validate_ref - validate a reference node.
  * @c: UBIFS file-system description object
  * @ref: the reference node to validate
- * @ref_lnum: LEB number of the reference node
- * @ref_offs: reference node offset
  *
  * This function returns %1 if a bud reference already exists for the LEB. %0 is
  * returned if the reference node is new, otherwise %-EINVAL is returned if
@@ -1154,7 +1128,7 @@ out:
 out_dump:
 	ubifs_err(c, "log error detected while replaying the log at LEB %d:%d",
 		  lnum, offs + snod->offs);
-	ubifs_dump_node(c, snod->node);
+	ubifs_dump_node(c, snod->node, c->leb_size - snod->offs);
 	ubifs_scan_destroy(sleb);
 	return -EINVAL;
 }

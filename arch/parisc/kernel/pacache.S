@@ -1,22 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  *  PARISC TLB and cache flushing support
  *  Copyright (C) 2000-2001 Hewlett-Packard (John Marvin)
  *  Copyright (C) 2001 Matthew Wilcox (willy at parisc-linux.org)
  *  Copyright (C) 2002 Richard Hirst (rhirst with parisc-linux.org)
- *
- *    This program is free software; you can redistribute it and/or modify
- *    it under the terms of the GNU General Public License as published by
- *    the Free Software Foundation; either version 2, or (at your option)
- *    any later version.
- *
- *    This program is distributed in the hope that it will be useful,
- *    but WITHOUT ANY WARRANTY; without even the implied warranty of
- *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *    GNU General Public License for more details.
- *
- *    You should have received a copy of the GNU General Public License
- *    along with this program; if not, write to the Free Software
- *    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 /*
@@ -34,12 +21,12 @@
 
 #include <asm/psw.h>
 #include <asm/assembly.h>
-#include <asm/pgtable.h>
 #include <asm/cache.h>
 #include <asm/ldcw.h>
 #include <asm/alternative.h>
 #include <linux/linkage.h>
 #include <linux/init.h>
+#include <linux/pgtable.h>
 
 	.section .text.hot
 	.align	16
@@ -76,7 +63,7 @@ ENTRY_CFI(flush_tlb_all_local)
 
 	/* Flush Instruction Tlb */
 
-	LDREG		ITLB_SID_BASE(%r1), %r20
+88:	LDREG		ITLB_SID_BASE(%r1), %r20
 	LDREG		ITLB_SID_STRIDE(%r1), %r21
 	LDREG		ITLB_SID_COUNT(%r1), %r22
 	LDREG		ITLB_OFF_BASE(%r1), %arg0
@@ -116,6 +103,7 @@ fitonemiddle:					/* Loop if LOOP = 1 */
 	add		%r21, %r20, %r20		/* increment space */
 
 fitdone:
+	ALTERNATIVE(88b, fitdone, ALT_COND_NO_SPLIT_TLB, INSN_NOP)
 
 	/* Flush Data Tlb */
 
@@ -186,6 +174,15 @@ fdtdone:
 
 2:      bv		%r0(%r2)
 	nop
+
+	/*
+	 * When running in qemu, drop whole flush_tlb_all_local function and
+	 * replace by one pdtlbe instruction, for which QEMU will drop all
+	 * local TLB entries.
+	 */
+3:	pdtlbe		%r0(%sr1,%r0)
+	bv,n		%r0(%r2)
+	ALTERNATIVE_CODE(flush_tlb_all_local, 2, ALT_COND_RUN_ON_QEMU, 3b)
 ENDPROC_CFI(flush_tlb_all_local)
 
 	.import cache_info,data
@@ -303,7 +300,6 @@ fdoneloop2:
 	fdce,m		%arg1(%sr1, %arg0)	/* Fdce for one loop */
 
 fdsync:
-	syncdma
 	sync
 	mtsm		%r22			/* restore I-bit */
 89:	ALTERNATIVE(88b, 89b, ALT_COND_NO_DCACHE, INSN_NOP)
@@ -491,6 +487,8 @@ ENDPROC_CFI(copy_page_asm)
  *       parisc chip designers that there will not ever be a parisc
  *       chip with a larger alias boundary (Never say never :-) ).
  *
+ *       Yah, what about the PA8800 and PA8900 processors?
+ *
  *       Subtle: the dtlb miss handlers support the temp alias region by
  *       "knowing" that if a dtlb miss happens within the temp alias
  *       region it must have occurred while in clear_user_page. Since
@@ -502,18 +500,9 @@ ENDPROC_CFI(copy_page_asm)
  *       miss on the translation, the dtlb miss handler inserts the
  *       translation into the tlb using these values:
  *
- *          %r26 physical page (shifted for tlb insert) of "to" translation
- *          %r23 physical page (shifted for tlb insert) of "from" translation
+ *          %r26 physical address of "to" translation
+ *          %r23 physical address of "from" translation
  */
-
-        /* Drop prot bits and convert to page addr for iitlbt and idtlbt */
-        #define PAGE_ADD_SHIFT  (PAGE_SHIFT-12)
-        .macro          convert_phys_for_tlb_insert20  phys
-        extrd,u         \phys, 56-PAGE_ADD_SHIFT, 32-PAGE_ADD_SHIFT, \phys
-#if _PAGE_SIZE_ENCODING_DEFAULT
-        depdi           _PAGE_SIZE_ENCODING_DEFAULT, 63, (63-58), \phys
-#endif
-	.endm
 
 	/*
 	 * copy_user_page_asm() performs a page copy using mappings
@@ -543,24 +532,10 @@ ENTRY_CFI(copy_user_page_asm)
 	sub		%r25, %r1, %r23
 
 	ldil		L%(TMPALIAS_MAP_START), %r28
-#ifdef CONFIG_64BIT
-#if (TMPALIAS_MAP_START >= 0x80000000)
-	depdi		0, 31,32, %r28		/* clear any sign extension */
-#endif
-	convert_phys_for_tlb_insert20 %r26	/* convert phys addr to tlb insert format */
-	convert_phys_for_tlb_insert20 %r23	/* convert phys addr to tlb insert format */
-	depd		%r24,63,22, %r28	/* Form aliased virtual address 'to' */
-	depdi		0, 63,PAGE_SHIFT, %r28	/* Clear any offset bits */
+	dep_safe	%r24, 31,TMPALIAS_SIZE_BITS, %r28	/* Form aliased virtual address 'to' */
+	depi_safe	0, 31,PAGE_SHIFT, %r28			/* Clear any offset bits */
 	copy		%r28, %r29
-	depdi		1, 41,1, %r29		/* Form aliased virtual address 'from' */
-#else
-	extrw,u		%r26, 24,25, %r26	/* convert phys addr to tlb insert format */
-	extrw,u		%r23, 24,25, %r23	/* convert phys addr to tlb insert format */
-	depw		%r24, 31,22, %r28	/* Form aliased virtual address 'to' */
-	depwi		0, 31,PAGE_SHIFT, %r28	/* Clear any offset bits */
-	copy		%r28, %r29
-	depwi		1, 9,1, %r29		/* Form aliased virtual address 'from' */
-#endif
+	depi_safe	1, 31-TMPALIAS_SIZE_BITS,1, %r29	/* Form aliased virtual address 'from' */
 
 	/* Purge any old translations */
 
@@ -690,18 +665,8 @@ ENTRY_CFI(clear_user_page_asm)
 	tophys_r1	%r26
 
 	ldil		L%(TMPALIAS_MAP_START), %r28
-#ifdef CONFIG_64BIT
-#if (TMPALIAS_MAP_START >= 0x80000000)
-	depdi		0, 31,32, %r28		/* clear any sign extension */
-#endif
-	convert_phys_for_tlb_insert20 %r26	/* convert phys addr to tlb insert format */
-	depd		%r25, 63,22, %r28	/* Form aliased virtual address 'to' */
-	depdi		0, 63,PAGE_SHIFT, %r28	/* Clear any offset bits */
-#else
-	extrw,u		%r26, 24,25, %r26	/* convert phys addr to tlb insert format */
-	depw		%r25, 31,22, %r28	/* Form aliased virtual address 'to' */
-	depwi		0, 31,PAGE_SHIFT, %r28	/* Clear any offset bits */
-#endif
+	dep_safe	%r25, 31,TMPALIAS_SIZE_BITS, %r28	/* Form aliased virtual address 'to' */
+	depi_safe	0, 31,PAGE_SHIFT, %r28			/* Clear any offset bits */
 
 	/* Purge any old translation */
 
@@ -766,18 +731,8 @@ ENDPROC_CFI(clear_user_page_asm)
 
 ENTRY_CFI(flush_dcache_page_asm)
 	ldil		L%(TMPALIAS_MAP_START), %r28
-#ifdef CONFIG_64BIT
-#if (TMPALIAS_MAP_START >= 0x80000000)
-	depdi		0, 31,32, %r28		/* clear any sign extension */
-#endif
-	convert_phys_for_tlb_insert20 %r26	/* convert phys addr to tlb insert format */
-	depd		%r25, 63,22, %r28	/* Form aliased virtual address 'to' */
-	depdi		0, 63,PAGE_SHIFT, %r28	/* Clear any offset bits */
-#else
-	extrw,u		%r26, 24,25, %r26	/* convert phys addr to tlb insert format */
-	depw		%r25, 31,22, %r28	/* Form aliased virtual address 'to' */
-	depwi		0, 31,PAGE_SHIFT, %r28	/* Clear any offset bits */
-#endif
+	dep_safe	%r25, 31,TMPALIAS_SIZE_BITS, %r28	/* Form aliased virtual address 'to' */
+	depi_safe	0, 31,PAGE_SHIFT, %r28			/* Clear any offset bits */
 
 	/* Purge any old translation */
 
@@ -825,18 +780,8 @@ ENDPROC_CFI(flush_dcache_page_asm)
 
 ENTRY_CFI(purge_dcache_page_asm)
 	ldil		L%(TMPALIAS_MAP_START), %r28
-#ifdef CONFIG_64BIT
-#if (TMPALIAS_MAP_START >= 0x80000000)
-	depdi		0, 31,32, %r28		/* clear any sign extension */
-#endif
-	convert_phys_for_tlb_insert20 %r26	/* convert phys addr to tlb insert format */
-	depd		%r25, 63,22, %r28	/* Form aliased virtual address 'to' */
-	depdi		0, 63,PAGE_SHIFT, %r28	/* Clear any offset bits */
-#else
-	extrw,u		%r26, 24,25, %r26	/* convert phys addr to tlb insert format */
-	depw		%r25, 31,22, %r28	/* Form aliased virtual address 'to' */
-	depwi		0, 31,PAGE_SHIFT, %r28	/* Clear any offset bits */
-#endif
+	dep_safe	%r25, 31,TMPALIAS_SIZE_BITS, %r28	/* Form aliased virtual address 'to' */
+	depi_safe	0, 31,PAGE_SHIFT, %r28			/* Clear any offset bits */
 
 	/* Purge any old translation */
 
@@ -884,18 +829,8 @@ ENDPROC_CFI(purge_dcache_page_asm)
 
 ENTRY_CFI(flush_icache_page_asm)
 	ldil		L%(TMPALIAS_MAP_START), %r28
-#ifdef CONFIG_64BIT
-#if (TMPALIAS_MAP_START >= 0x80000000)
-	depdi		0, 31,32, %r28		/* clear any sign extension */
-#endif
-	convert_phys_for_tlb_insert20 %r26	/* convert phys addr to tlb insert format */
-	depd		%r25, 63,22, %r28	/* Form aliased virtual address 'to' */
-	depdi		0, 63,PAGE_SHIFT, %r28	/* Clear any offset bits */
-#else
-	extrw,u		%r26, 24,25, %r26	/* convert phys addr to tlb insert format */
-	depw		%r25, 31,22, %r28	/* Form aliased virtual address 'to' */
-	depwi		0, 31,PAGE_SHIFT, %r28	/* Clear any offset bits */
-#endif
+	dep_safe	%r25, 31,TMPALIAS_SIZE_BITS, %r28	/* Form aliased virtual address 'to' */
+	depi_safe	0, 31,PAGE_SHIFT, %r28			/* Clear any offset bits */
 
 	/* Purge any old translation.  Note that the FIC instruction
 	 * may use either the instruction or data TLB.  Given that we
@@ -954,6 +889,7 @@ ENDPROC_CFI(flush_icache_page_asm)
 ENTRY_CFI(flush_kernel_dcache_page_asm)
 88:	ldil		L%dcache_stride, %r1
 	ldw		R%dcache_stride(%r1), %r23
+	depi_safe	0, 31,PAGE_SHIFT, %r26	/* Clear any offset bits */
 
 #ifdef CONFIG_64BIT
 	depdi,z		1, 63-PAGE_SHIFT,1, %r25
@@ -990,6 +926,7 @@ ENDPROC_CFI(flush_kernel_dcache_page_asm)
 ENTRY_CFI(purge_kernel_dcache_page_asm)
 88:	ldil		L%dcache_stride, %r1
 	ldw		R%dcache_stride(%r1), %r23
+	depi_safe	0, 31,PAGE_SHIFT, %r26	/* Clear any offset bits */
 
 #ifdef CONFIG_64BIT
 	depdi,z		1, 63-PAGE_SHIFT,1, %r25
@@ -1101,7 +1038,6 @@ ENTRY_CFI(flush_kernel_dcache_range_asm)
 
 	sync
 89:	ALTERNATIVE(88b, 89b, ALT_COND_NO_DCACHE, INSN_NOP)
-	syncdma
 	bv		%r0(%r2)
 	nop
 ENDPROC_CFI(flush_kernel_dcache_range_asm)
@@ -1143,7 +1079,6 @@ ENTRY_CFI(purge_kernel_dcache_range_asm)
 
 	sync
 89:	ALTERNATIVE(88b, 89b, ALT_COND_NO_DCACHE, INSN_NOP)
-	syncdma
 	bv		%r0(%r2)
 	nop
 ENDPROC_CFI(purge_kernel_dcache_range_asm)
@@ -1267,7 +1202,7 @@ ENTRY_CFI(flush_kernel_icache_range_asm)
 	nop
 ENDPROC_CFI(flush_kernel_icache_range_asm)
 
-	__INIT
+	.text
 
 	/* align should cover use of rfi in disable_sr_hashing_asm and
 	 * srdis_done.

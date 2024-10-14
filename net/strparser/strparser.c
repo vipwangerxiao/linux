@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Stream Parser
  *
  * Copyright (c) 2016 Tom Herbert <tom@herbertland.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.
  */
 
 #include <linux/bpf.h>
@@ -30,18 +27,10 @@
 
 static struct workqueue_struct *strp_wq;
 
-struct _strp_msg {
-	/* Internal cb structure. struct strp_msg must be first for passing
-	 * to upper layer.
-	 */
-	struct strp_msg strp;
-	int accum_len;
-};
-
 static inline struct _strp_msg *_strp_msg(struct sk_buff *skb)
 {
 	return (struct _strp_msg *)((void *)skb->cb +
-		offsetof(struct qdisc_skb_cb, data));
+		offsetof(struct sk_skb_cb, strp));
 }
 
 /* Lower lock held */
@@ -61,7 +50,7 @@ static void strp_abort_strp(struct strparser *strp, int err)
 
 		/* Report an error on the lower socket */
 		sk->sk_err = -err;
-		sk->sk_error_report(sk);
+		sk_error_report(sk);
 	}
 }
 
@@ -160,18 +149,14 @@ static int __strp_recv(read_descriptor_t *desc, struct sk_buff *orig_skb,
 					return 0;
 				}
 
-				skb = alloc_skb(0, GFP_ATOMIC);
+				skb = alloc_skb_for_msg(head);
 				if (!skb) {
 					STRP_STATS_INCR(strp->stats.mem_fail);
 					desc->error = -ENOMEM;
 					return 0;
 				}
-				skb->len = head->len;
-				skb->data_len = head->len;
-				skb->truesize = head->truesize;
-				*_strp_msg(skb) = *_strp_msg(head);
+
 				strp->skb_nextp = &head->next;
-				skb_shinfo(skb)->frag_list = head;
 				strp->skb_head = skb;
 				head = skb;
 			} else {
@@ -548,6 +533,9 @@ EXPORT_SYMBOL_GPL(strp_check_rcv);
 
 static int __init strp_dev_init(void)
 {
+	BUILD_BUG_ON(sizeof(struct sk_skb_cb) >
+		     sizeof_field(struct sk_buff, cb));
+
 	strp_wq = create_singlethread_workqueue("kstrp");
 	if (unlikely(!strp_wq))
 		return -ENOMEM;

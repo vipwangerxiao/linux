@@ -1,19 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Tegra host1x Command DMA
  *
  * Copyright (c) 2010-2013, NVIDIA Corporation.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __HOST1X_CDMA_H
@@ -22,6 +11,7 @@
 #include <linux/sched.h>
 #include <linux/completion.h>
 #include <linux/list.h>
+#include <linux/workqueue.h>
 
 struct host1x_syncpt;
 struct host1x_userctx_timeout;
@@ -80,6 +70,7 @@ struct host1x_cdma {
 	struct buffer_timeout timeout;	/* channel's timeout state/wq */
 	bool running;
 	bool torndown;
+	struct work_struct update_work;
 };
 
 #define cdma_to_channel(cdma) container_of(cdma, struct host1x_channel, cdma)

@@ -17,11 +17,7 @@
 #include <linux/reset-controller.h>
 
 #include "clk-regmap.h"
-
-struct meson_aoclk_input {
-	const char *name;
-	bool required;
-};
+#include "meson-clkc-utils.h"
 
 struct meson_aoclk_data {
 	const unsigned int			reset_reg;
@@ -29,10 +25,7 @@ struct meson_aoclk_data {
 	const unsigned int			*reset;
 	const int				num_clks;
 	struct clk_regmap			**clks;
-	const int				num_inputs;
-	const struct meson_aoclk_input		*inputs;
-	const char				*input_prefix;
-	const struct clk_hw_onecell_data	*hw_data;
+	struct meson_clk_hw_data		hw_clks;
 };
 
 struct meson_aoclk_reset_controller {

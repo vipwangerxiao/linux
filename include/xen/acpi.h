@@ -40,41 +40,6 @@
 #include <xen/xen.h>
 #include <linux/acpi.h>
 
-#define ACPI_MEMORY_DEVICE_CLASS        "memory"
-#define ACPI_MEMORY_DEVICE_HID          "PNP0C80"
-#define ACPI_MEMORY_DEVICE_NAME         "Hotplug Mem Device"
-
-int xen_stub_memory_device_init(void);
-void xen_stub_memory_device_exit(void);
-
-#define ACPI_PROCESSOR_CLASS            "processor"
-#define ACPI_PROCESSOR_DEVICE_HID       "ACPI0007"
-#define ACPI_PROCESSOR_DEVICE_NAME      "Processor"
-
-int xen_stub_processor_init(void);
-void xen_stub_processor_exit(void);
-
-void xen_pcpu_hotplug_sync(void);
-int xen_pcpu_id(uint32_t acpi_id);
-
-static inline int xen_acpi_get_pxm(acpi_handle h)
-{
-	unsigned long long pxm;
-	acpi_status status;
-	acpi_handle handle;
-	acpi_handle phandle = h;
-
-	do {
-		handle = phandle;
-		status = acpi_evaluate_integer(handle, "_PXM", NULL, &pxm);
-		if (ACPI_SUCCESS(status))
-			return pxm;
-		status = acpi_get_parent(handle, &phandle);
-	} while (ACPI_SUCCESS(status));
-
-	return -ENXIO;
-}
-
 int xen_acpi_notify_hypervisor_sleep(u8 sleep_state,
 				     u32 pm1a_cnt, u32 pm1b_cnd);
 int xen_acpi_notify_hypervisor_extended_sleep(u8 sleep_state,
@@ -102,9 +67,36 @@ static inline void xen_acpi_sleep_register(void)
 		acpi_suspend_lowlevel = xen_acpi_suspend_lowlevel;
 	}
 }
+int xen_pvh_setup_gsi(int gsi, int trigger, int polarity);
+int xen_acpi_get_gsi_info(struct pci_dev *dev,
+						  int *gsi_out,
+						  int *trigger_out,
+						  int *polarity_out);
 #else
 static inline void xen_acpi_sleep_register(void)
 {
+}
+
+static inline int xen_pvh_setup_gsi(int gsi, int trigger, int polarity)
+{
+	return -1;
+}
+
+static inline int xen_acpi_get_gsi_info(struct pci_dev *dev,
+						  int *gsi_out,
+						  int *trigger_out,
+						  int *polarity_out)
+{
+	return -1;
+}
+#endif
+
+#ifdef CONFIG_XEN_PCI_STUB
+int pcistub_get_gsi_from_sbdf(unsigned int sbdf);
+#else
+static inline int pcistub_get_gsi_from_sbdf(unsigned int sbdf)
+{
+	return -1;
 }
 #endif
 

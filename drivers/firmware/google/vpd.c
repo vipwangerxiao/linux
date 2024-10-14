@@ -1,18 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * vpd.c
  *
  * Driver for exporting VPD content to sysfs.
  *
  * Copyright 2017 Google Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License v2.0 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/ctype.h>
@@ -40,7 +32,7 @@ struct vpd_cbmem {
 	u32 version;
 	u32 ro_size;
 	u32 rw_size;
-	u8  blob[0];
+	u8  blob[];
 };
 
 struct vpd_section {
@@ -100,8 +92,8 @@ static int vpd_section_check_key_name(const u8 *key, s32 key_len)
 	return VPD_OK;
 }
 
-static int vpd_section_attrib_add(const u8 *key, s32 key_len,
-				  const u8 *value, s32 value_len,
+static int vpd_section_attrib_add(const u8 *key, u32 key_len,
+				  const u8 *value, u32 value_len,
 				  void *arg)
 {
 	int ret;
@@ -306,15 +298,19 @@ static int vpd_probe(struct coreboot_device *dev)
 	return 0;
 }
 
-static int vpd_remove(struct coreboot_device *dev)
+static void vpd_remove(struct coreboot_device *dev)
 {
 	vpd_section_destroy(&ro_vpd);
 	vpd_section_destroy(&rw_vpd);
 
 	kobject_put(vpd_kobj);
-
-	return 0;
 }
+
+static const struct coreboot_device_id vpd_ids[] = {
+	{ .tag = CB_TAG_VPD },
+	{ /* sentinel */ }
+};
+MODULE_DEVICE_TABLE(coreboot, vpd_ids);
 
 static struct coreboot_driver vpd_driver = {
 	.probe = vpd_probe,
@@ -322,21 +318,10 @@ static struct coreboot_driver vpd_driver = {
 	.drv = {
 		.name = "vpd",
 	},
-	.tag = CB_TAG_VPD,
+	.id_table = vpd_ids,
 };
-
-static int __init coreboot_vpd_init(void)
-{
-	return coreboot_driver_register(&vpd_driver);
-}
-
-static void __exit coreboot_vpd_exit(void)
-{
-	coreboot_driver_unregister(&vpd_driver);
-}
-
-module_init(coreboot_vpd_init);
-module_exit(coreboot_vpd_exit);
+module_coreboot_driver(vpd_driver);
 
 MODULE_AUTHOR("Google, Inc.");
+MODULE_DESCRIPTION("Driver for exporting Vital Product Data content to sysfs");
 MODULE_LICENSE("GPL");

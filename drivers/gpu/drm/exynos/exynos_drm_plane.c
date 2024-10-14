@@ -1,22 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2011 Samsung Electronics Co.Ltd
  * Authors: Joonyoung Shim <jy0922.shim@samsung.com>
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
- *
  */
 
-#include <drm/drmP.h>
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
-#include <drm/drm_plane_helper.h>
+#include <drm/drm_blend.h>
+#include <drm/drm_framebuffer.h>
 #include <drm/exynos_drm.h>
-#include "exynos_drm_drv.h"
+
 #include "exynos_drm_crtc.h"
+#include "exynos_drm_drv.h"
 #include "exynos_drm_fb.h"
 #include "exynos_drm_gem.h"
 #include "exynos_drm_plane.h"
@@ -233,14 +229,16 @@ exynos_drm_plane_check_size(const struct exynos_drm_plane_config *config,
 }
 
 static int exynos_plane_atomic_check(struct drm_plane *plane,
-				     struct drm_plane_state *state)
+				     struct drm_atomic_state *state)
 {
+	struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state,
+										 plane);
 	struct exynos_drm_plane *exynos_plane = to_exynos_plane(plane);
 	struct exynos_drm_plane_state *exynos_state =
-						to_exynos_plane_state(state);
+						to_exynos_plane_state(new_plane_state);
 	int ret = 0;
 
-	if (!state->crtc || !state->fb)
+	if (!new_plane_state->crtc || !new_plane_state->fb)
 		return 0;
 
 	/* translate state into exynos_state */
@@ -255,13 +253,14 @@ static int exynos_plane_atomic_check(struct drm_plane *plane,
 }
 
 static void exynos_plane_atomic_update(struct drm_plane *plane,
-				       struct drm_plane_state *old_state)
+				       struct drm_atomic_state *state)
 {
-	struct drm_plane_state *state = plane->state;
-	struct exynos_drm_crtc *exynos_crtc = to_exynos_crtc(state->crtc);
+	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state,
+								           plane);
+	struct exynos_drm_crtc *exynos_crtc = to_exynos_crtc(new_state->crtc);
 	struct exynos_drm_plane *exynos_plane = to_exynos_plane(plane);
 
-	if (!state->crtc)
+	if (!new_state->crtc)
 		return;
 
 	if (exynos_crtc->ops->update_plane)
@@ -269,8 +268,9 @@ static void exynos_plane_atomic_update(struct drm_plane *plane,
 }
 
 static void exynos_plane_atomic_disable(struct drm_plane *plane,
-					struct drm_plane_state *old_state)
+					struct drm_atomic_state *state)
 {
+	struct drm_plane_state *old_state = drm_atomic_get_old_plane_state(state, plane);
 	struct exynos_drm_plane *exynos_plane = to_exynos_plane(plane);
 	struct exynos_drm_crtc *exynos_crtc = to_exynos_crtc(old_state->crtc);
 

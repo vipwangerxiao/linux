@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * net/sched/cls_fw.c	Classifier mapping ipchains' fwmark to traffic class.
- *
- *		This program is free software; you can redistribute it and/or
- *		modify it under the terms of the GNU General Public License
- *		as published by the Free Software Foundation; either version
- *		2 of the License, or (at your option) any later version.
  *
  * Authors:	Alexey Kuznetsov, <kuznet@ms2.inr.ac.ru>
  *
@@ -12,10 +8,6 @@
  * Karlis Peisenieks <karlis@mt.lv> : 990415 : fw_walk off by one
  * Karlis Peisenieks <karlis@mt.lv> : 990415 : fw_delete killed all the filter (and kernel).
  * Alex <alex@pilotsoft.com> : 2004xxyy: Added Action extension
- *
- * JHS: We should remove the CONFIG_NET_CLS_IND from here
- * eventually when the meta match extension is made available
- *
  */
 
 #include <linux/module.h>
@@ -29,6 +21,7 @@
 #include <net/act_api.h>
 #include <net/pkt_cls.h>
 #include <net/sch_generic.h>
+#include <net/tc_wrapper.h>
 
 #define HTSIZE 256
 
@@ -42,9 +35,7 @@ struct fw_filter {
 	struct fw_filter __rcu	*next;
 	u32			id;
 	struct tcf_result	res;
-#ifdef CONFIG_NET_CLS_IND
 	int			ifindex;
-#endif /* CONFIG_NET_CLS_IND */
 	struct tcf_exts		exts;
 	struct tcf_proto	*tp;
 	struct rcu_work		rwork;
@@ -57,8 +48,9 @@ static u32 fw_hash(u32 handle)
 	return handle % HTSIZE;
 }
 
-static int fw_classify(struct sk_buff *skb, const struct tcf_proto *tp,
-		       struct tcf_result *res)
+TC_INDIRECT_SCOPE int fw_classify(struct sk_buff *skb,
+				  const struct tcf_proto *tp,
+				  struct tcf_result *res)
 {
 	struct fw_head *head = rcu_dereference_bh(tp->root);
 	struct fw_filter *f;
@@ -72,10 +64,8 @@ static int fw_classify(struct sk_buff *skb, const struct tcf_proto *tp,
 		     f = rcu_dereference_bh(f->next)) {
 			if (f->id == id) {
 				*res = f->res;
-#ifdef CONFIG_NET_CLS_IND
 				if (!tcf_match_indev(skb, f->ifindex))
 					continue;
-#endif /* CONFIG_NET_CLS_IND */
 				r = tcf_exts_exec(skb, &f->exts, res);
 				if (r < 0)
 					continue;
@@ -210,24 +200,18 @@ static const struct nla_policy fw_policy[TCA_FW_MAX + 1] = {
 
 static int fw_set_parms(struct net *net, struct tcf_proto *tp,
 			struct fw_filter *f, struct nlattr **tb,
-			struct nlattr **tca, unsigned long base, bool ovr,
+			struct nlattr **tca, unsigned long base, u32 flags,
 			struct netlink_ext_ack *extack)
 {
 	struct fw_head *head = rtnl_dereference(tp->root);
 	u32 mask;
 	int err;
 
-	err = tcf_exts_validate(net, tp, tb, tca[TCA_RATE], &f->exts, ovr,
-				true, extack);
+	err = tcf_exts_validate(net, tp, tb, tca[TCA_RATE], &f->exts, flags,
+				extack);
 	if (err < 0)
 		return err;
 
-	if (tb[TCA_FW_CLASSID]) {
-		f->res.classid = nla_get_u32(tb[TCA_FW_CLASSID]);
-		tcf_bind_filter(tp, &f->res, base);
-	}
-
-#ifdef CONFIG_NET_CLS_IND
 	if (tb[TCA_FW_INDEV]) {
 		int ret;
 		ret = tcf_change_indev(net, tb[TCA_FW_INDEV], extack);
@@ -235,7 +219,6 @@ static int fw_set_parms(struct net *net, struct tcf_proto *tp,
 			return ret;
 		f->ifindex = ret;
 	}
-#endif /* CONFIG_NET_CLS_IND */
 
 	err = -EINVAL;
 	if (tb[TCA_FW_MASK]) {
@@ -245,14 +228,18 @@ static int fw_set_parms(struct net *net, struct tcf_proto *tp,
 	} else if (head->mask != 0xFFFFFFFF)
 		return err;
 
+	if (tb[TCA_FW_CLASSID]) {
+		f->res.classid = nla_get_u32(tb[TCA_FW_CLASSID]);
+		tcf_bind_filter(tp, &f->res, base);
+	}
+
 	return 0;
 }
 
 static int fw_change(struct net *net, struct sk_buff *in_skb,
 		     struct tcf_proto *tp, unsigned long base,
 		     u32 handle, struct nlattr **tca, void **arg,
-		     bool ovr, bool rtnl_held,
-		     struct netlink_ext_ack *extack)
+		     u32 flags, struct netlink_ext_ack *extack)
 {
 	struct fw_head *head = rtnl_dereference(tp->root);
 	struct fw_filter *f = *arg;
@@ -280,10 +267,7 @@ static int fw_change(struct net *net, struct sk_buff *in_skb,
 			return -ENOBUFS;
 
 		fnew->id = f->id;
-		fnew->res = f->res;
-#ifdef CONFIG_NET_CLS_IND
 		fnew->ifindex = f->ifindex;
-#endif /* CONFIG_NET_CLS_IND */
 		fnew->tp = f->tp;
 
 		err = tcf_exts_init(&fnew->exts, net, TCA_FW_ACT,
@@ -293,7 +277,7 @@ static int fw_change(struct net *net, struct sk_buff *in_skb,
 			return err;
 		}
 
-		err = fw_set_parms(net, tp, fnew, tb, tca, base, ovr, extack);
+		err = fw_set_parms(net, tp, fnew, tb, tca, base, flags, extack);
 		if (err < 0) {
 			tcf_exts_destroy(&fnew->exts);
 			kfree(fnew);
@@ -342,7 +326,7 @@ static int fw_change(struct net *net, struct sk_buff *in_skb,
 	f->id = handle;
 	f->tp = tp;
 
-	err = fw_set_parms(net, tp, f, tb, tca, base, ovr, extack);
+	err = fw_set_parms(net, tp, f, tb, tca, base, flags, extack);
 	if (err < 0)
 		goto errout;
 
@@ -375,15 +359,8 @@ static void fw_walk(struct tcf_proto *tp, struct tcf_walker *arg,
 
 		for (f = rtnl_dereference(head->ht[h]); f;
 		     f = rtnl_dereference(f->next)) {
-			if (arg->count < arg->skip) {
-				arg->count++;
-				continue;
-			}
-			if (arg->fn(tp, f, arg) < 0) {
-				arg->stop = 1;
+			if (!tc_cls_stats_dump(tp, arg, f))
 				return;
-			}
-			arg->count++;
 		}
 	}
 }
@@ -410,14 +387,12 @@ static int fw_dump(struct net *net, struct tcf_proto *tp, void *fh,
 	if (f->res.classid &&
 	    nla_put_u32(skb, TCA_FW_CLASSID, f->res.classid))
 		goto nla_put_failure;
-#ifdef CONFIG_NET_CLS_IND
 	if (f->ifindex) {
 		struct net_device *dev;
 		dev = __dev_get_by_index(net, f->ifindex);
 		if (dev && nla_put_string(skb, TCA_FW_INDEV, dev->name))
 			goto nla_put_failure;
 	}
-#endif /* CONFIG_NET_CLS_IND */
 	if (head->mask != 0xFFFFFFFF &&
 	    nla_put_u32(skb, TCA_FW_MASK, head->mask))
 		goto nla_put_failure;
@@ -437,12 +412,12 @@ nla_put_failure:
 	return -1;
 }
 
-static void fw_bind_class(void *fh, u32 classid, unsigned long cl)
+static void fw_bind_class(void *fh, u32 classid, unsigned long cl, void *q,
+			  unsigned long base)
 {
 	struct fw_filter *f = fh;
 
-	if (f && f->res.classid == classid)
-		f->res.class = cl;
+	tc_cls_bind_class(classid, cl, q, &f->res, base);
 }
 
 static struct tcf_proto_ops cls_fw_ops __read_mostly = {
@@ -458,6 +433,7 @@ static struct tcf_proto_ops cls_fw_ops __read_mostly = {
 	.bind_class	=	fw_bind_class,
 	.owner		=	THIS_MODULE,
 };
+MODULE_ALIAS_NET_CLS("fw");
 
 static int __init init_fw(void)
 {
@@ -471,4 +447,5 @@ static void __exit exit_fw(void)
 
 module_init(init_fw)
 module_exit(exit_fw)
+MODULE_DESCRIPTION("SKB mark based TC classifier");
 MODULE_LICENSE("GPL");

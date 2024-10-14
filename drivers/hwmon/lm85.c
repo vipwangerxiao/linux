@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * lm85.c - Part of lm_sensors, Linux kernel modules for hardware
  *	    monitoring
@@ -8,24 +9,10 @@
  * Copyright (C) 2007--2014  Jean Delvare <jdelvare@suse.de>
  *
  * Chip details at	      <http://www.national.com/ds/LM/LM85.pdf>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/module.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/jiffies.h>
@@ -307,7 +294,7 @@ struct lm85_data {
 	bool has_vid5;	/* true if VID5 is configured for ADT7463 or ADT7468 */
 
 	struct mutex update_lock;
-	int valid;		/* !=0 if following fields are valid */
+	bool valid;		/* true if following fields are valid */
 	unsigned long last_reading;	/* In jiffies */
 	unsigned long last_config;	/* In jiffies */
 
@@ -554,7 +541,7 @@ static struct lm85_data *lm85_update_device(struct device *dev)
 		data->last_config = jiffies;
 	}  /* last_config */
 
-	data->valid = 1;
+	data->valid = true;
 
 	mutex_unlock(&data->update_lock);
 
@@ -1552,12 +1539,12 @@ static int lm85_detect(struct i2c_client *client, struct i2c_board_info *info)
 	if (!type_name)
 		return -ENODEV;
 
-	strlcpy(info->type, type_name, I2C_NAME_SIZE);
+	strscpy(info->type, type_name, I2C_NAME_SIZE);
 
 	return 0;
 }
 
-static int lm85_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int lm85_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
@@ -1569,10 +1556,7 @@ static int lm85_probe(struct i2c_client *client, const struct i2c_device_id *id)
 		return -ENOMEM;
 
 	data->client = client;
-	if (client->dev.of_node)
-		data->type = (enum chips)of_device_get_match_data(&client->dev);
-	else
-		data->type = id->driver_data;
+	data->type = (uintptr_t)i2c_get_match_data(client);
 	mutex_init(&data->update_lock);
 
 	/* Fill in the chip specific driver values */

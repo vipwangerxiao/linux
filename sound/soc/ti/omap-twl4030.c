@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * omap-twl4030.c  --  SoC audio for TI SoC based boards with twl4030 codec
  *
- * Copyright (C) 2012 Texas Instruments Incorporated - http://www.ti.com
+ * Copyright (C) 2012 Texas Instruments Incorporated - https://www.ti.com
  * All rights reserved.
  *
  * Author: Peter Ujfalusi <peter.ujfalusi@ti.com>
@@ -13,29 +14,12 @@
  * igep0020 (Author: Enric Balletbo i Serra <eballetbo@iseebcn.com>)
  * zoom2 (Author: Misael Lopez Cruz <misael.lopez@ti.com>)
  * sdp3430 (Author: Misael Lopez Cruz <misael.lopez@ti.com>)
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
  */
 
 #include <linux/platform_device.h>
 #include <linux/platform_data/omap-twl4030.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/gpio.h>
-#include <linux/of_gpio.h>
 
 #include <sound/core.h>
 #include <sound/pcm.h>
@@ -45,14 +29,13 @@
 #include "omap-mcbsp.h"
 
 struct omap_twl4030 {
-	int jack_detect;	/* board can detect jack events */
 	struct snd_soc_jack hs_jack;
 };
 
 static int omap_twl4030_hw_params(struct snd_pcm_substream *substream,
 	struct snd_pcm_hw_params *params)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 	unsigned int fmt;
 
 	switch (params_channels(params)) {
@@ -144,7 +127,7 @@ static struct snd_soc_jack_pin hs_jack_pins[] = {
 /* Headset jack detection gpios */
 static struct snd_soc_jack_gpio hs_jack_gpios[] = {
 	{
-		.name = "hsdet-gpio",
+		.name = "ti,jack-det",
 		.report = SND_JACK_HEADSET,
 		.debounce_time = 200,
 	},
@@ -165,14 +148,18 @@ static int omap_twl4030_init(struct snd_soc_pcm_runtime *rtd)
 	struct omap_twl4030 *priv = snd_soc_card_get_drvdata(card);
 	int ret = 0;
 
-	/* Headset jack detection only if it is supported */
-	if (priv->jack_detect > 0) {
-		hs_jack_gpios[0].gpio = priv->jack_detect;
+	/*
+	 * This is a bit of a hack, but the GPIO is optional so we
+	 * only want to add the jack detection if the GPIO is there.
+	 */
+	if (of_property_present(card->dev->of_node, "ti,jack-det-gpio")) {
+		hs_jack_gpios[0].gpiod_dev = card->dev;
+		hs_jack_gpios[0].idx = 0;
 
-		ret = snd_soc_card_jack_new(rtd->card, "Headset Jack",
-					    SND_JACK_HEADSET, &priv->hs_jack,
-					    hs_jack_pins,
-					    ARRAY_SIZE(hs_jack_pins));
+		ret = snd_soc_card_jack_new_pins(rtd->card, "Headset Jack",
+						 SND_JACK_HEADSET,
+						 &priv->hs_jack, hs_jack_pins,
+						 ARRAY_SIZE(hs_jack_pins));
 		if (ret)
 			return ret;
 
@@ -209,26 +196,30 @@ static int omap_twl4030_init(struct snd_soc_pcm_runtime *rtd)
 }
 
 /* Digital audio interface glue - connects codec <--> CPU */
+SND_SOC_DAILINK_DEFS(hifi,
+	DAILINK_COMP_ARRAY(COMP_CPU("omap-mcbsp.2")),
+	DAILINK_COMP_ARRAY(COMP_CODEC("twl4030-codec", "twl4030-hifi")),
+	DAILINK_COMP_ARRAY(COMP_PLATFORM("omap-mcbsp.2")));
+
+SND_SOC_DAILINK_DEFS(voice,
+	DAILINK_COMP_ARRAY(COMP_CPU("omap-mcbsp.3")),
+	DAILINK_COMP_ARRAY(COMP_CODEC("twl4030-codec", "twl4030-voice")),
+	DAILINK_COMP_ARRAY(COMP_PLATFORM("omap-mcbsp.3")));
+
 static struct snd_soc_dai_link omap_twl4030_dai_links[] = {
 	{
 		.name = "TWL4030 HiFi",
 		.stream_name = "TWL4030 HiFi",
-		.cpu_dai_name = "omap-mcbsp.2",
-		.codec_dai_name = "twl4030-hifi",
-		.platform_name = "omap-mcbsp.2",
-		.codec_name = "twl4030-codec",
 		.init = omap_twl4030_init,
 		.ops = &omap_twl4030_ops,
+		SND_SOC_DAILINK_REG(hifi),
 	},
 	{
 		.name = "TWL4030 Voice",
 		.stream_name = "TWL4030 Voice",
-		.cpu_dai_name = "omap-mcbsp.3",
-		.codec_dai_name = "twl4030-voice",
-		.platform_name = "omap-mcbsp.3",
-		.codec_name = "twl4030-codec",
 		.dai_fmt = SND_SOC_DAIFMT_DSP_A | SND_SOC_DAIFMT_IB_NF |
 			   SND_SOC_DAIFMT_CBM_CFM,
+		SND_SOC_DAILINK_REG(voice),
 	},
 };
 
@@ -272,25 +263,22 @@ static int omap_twl4030_probe(struct platform_device *pdev)
 			dev_err(&pdev->dev, "McBSP node is not provided\n");
 			return -EINVAL;
 		}
-		omap_twl4030_dai_links[0].cpu_dai_name  = NULL;
-		omap_twl4030_dai_links[0].cpu_of_node = dai_node;
+		omap_twl4030_dai_links[0].cpus->dai_name  = NULL;
+		omap_twl4030_dai_links[0].cpus->of_node = dai_node;
 
-		omap_twl4030_dai_links[0].platform_name  = NULL;
-		omap_twl4030_dai_links[0].platform_of_node = dai_node;
+		omap_twl4030_dai_links[0].platforms->name  = NULL;
+		omap_twl4030_dai_links[0].platforms->of_node = dai_node;
 
 		dai_node = of_parse_phandle(node, "ti,mcbsp-voice", 0);
 		if (!dai_node) {
 			card->num_links = 1;
 		} else {
-			omap_twl4030_dai_links[1].cpu_dai_name  = NULL;
-			omap_twl4030_dai_links[1].cpu_of_node = dai_node;
+			omap_twl4030_dai_links[1].cpus->dai_name  = NULL;
+			omap_twl4030_dai_links[1].cpus->of_node = dai_node;
 
-			omap_twl4030_dai_links[1].platform_name  = NULL;
-			omap_twl4030_dai_links[1].platform_of_node = dai_node;
+			omap_twl4030_dai_links[1].platforms->name  = NULL;
+			omap_twl4030_dai_links[1].platforms->of_node = dai_node;
 		}
-
-		priv->jack_detect = of_get_named_gpio(node,
-						      "ti,jack-det-gpio", 0);
 
 		/* Optional: audio routing can be provided */
 		prop = of_find_property(node, "ti,audio-routing", NULL);
@@ -312,8 +300,6 @@ static int omap_twl4030_probe(struct platform_device *pdev)
 
 		if (!pdata->voice_connected)
 			card->num_links = 1;
-
-		priv->jack_detect = pdata->jack_detect;
 	} else {
 		dev_err(&pdev->dev, "Missing pdata\n");
 		return -ENODEV;

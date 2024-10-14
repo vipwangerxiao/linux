@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Core driver access RC5T583 power management chip.
  *
@@ -6,19 +7,6 @@
  *
  * Based on code
  *	Copyright (C) 2011 RICOH COMPANY,LTD
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 #include <linux/interrupt.h>
 #include <linux/irq.h>
@@ -242,11 +230,10 @@ static const struct regmap_config rc5t583_regmap_config = {
 	.volatile_reg = volatile_reg,
 	.max_register = RC5T583_MAX_REG,
 	.num_reg_defaults_raw = RC5T583_NUM_REGS,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 };
 
-static int rc5t583_i2c_probe(struct i2c_client *i2c,
-			      const struct i2c_device_id *id)
+static int rc5t583_i2c_probe(struct i2c_client *i2c)
 {
 	struct rc5t583 *rc5t583;
 	struct rc5t583_platform_data *pdata = dev_get_platdata(&i2c->dev);

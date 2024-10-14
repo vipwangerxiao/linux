@@ -14,7 +14,7 @@
 #include <linux/kernel.h>
 #include <linux/mfd/stmpe.h>
 #include <linux/module.h>
-#include <linux/of_platform.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/device.h>
 
@@ -61,9 +61,11 @@ struct stmpe_adc {
 static int stmpe_read_voltage(struct stmpe_adc *info,
 		struct iio_chan_spec const *chan, int *val)
 {
-	long ret;
+	unsigned long ret;
 
 	mutex_lock(&info->lock);
+
+	reinit_completion(&info->completion);
 
 	info->channel = (u8)chan->channel;
 
@@ -72,23 +74,16 @@ static int stmpe_read_voltage(struct stmpe_adc *info,
 		return -EINVAL;
 	}
 
-	stmpe_reg_write(info->stmpe, STMPE_REG_ADC_INT_EN,
-			STMPE_ADC_CH(info->channel));
-
 	stmpe_reg_write(info->stmpe, STMPE_REG_ADC_CAPT,
 			STMPE_ADC_CH(info->channel));
 
-	*val = info->value;
+	ret = wait_for_completion_timeout(&info->completion, STMPE_ADC_TIMEOUT);
 
-	ret = wait_for_completion_interruptible_timeout
-		(&info->completion, STMPE_ADC_TIMEOUT);
-
-	if (ret <= 0) {
+	if (ret == 0) {
+		stmpe_reg_write(info->stmpe, STMPE_REG_ADC_INT_STA,
+				STMPE_ADC_CH(info->channel));
 		mutex_unlock(&info->lock);
-		if (ret == 0)
-			return -ETIMEDOUT;
-		else
-			return ret;
+		return -ETIMEDOUT;
 	}
 
 	*val = info->value;
@@ -101,9 +96,11 @@ static int stmpe_read_voltage(struct stmpe_adc *info,
 static int stmpe_read_temp(struct stmpe_adc *info,
 		struct iio_chan_spec const *chan, int *val)
 {
-	long ret;
+	unsigned long ret;
 
 	mutex_lock(&info->lock);
+
+	reinit_completion(&info->completion);
 
 	info->channel = (u8)chan->channel;
 
@@ -115,15 +112,11 @@ static int stmpe_read_temp(struct stmpe_adc *info,
 	stmpe_reg_write(info->stmpe, STMPE_REG_TEMP_CTRL,
 			STMPE_START_ONE_TEMP_CONV);
 
-	ret = wait_for_completion_interruptible_timeout
-		(&info->completion, STMPE_ADC_TIMEOUT);
+	ret = wait_for_completion_timeout(&info->completion, STMPE_ADC_TIMEOUT);
 
-	if (ret <= 0) {
+	if (ret == 0) {
 		mutex_unlock(&info->lock);
-		if (ret == 0)
-			return -ETIMEDOUT;
-		else
-			return ret;
+		return -ETIMEDOUT;
 	}
 
 	/*
@@ -182,7 +175,7 @@ static int stmpe_read_raw(struct iio_dev *indio_dev,
 static irqreturn_t stmpe_adc_isr(int irq, void *dev_id)
 {
 	struct stmpe_adc *info = (struct stmpe_adc *)dev_id;
-	u16 data;
+	__be16 data;
 
 	if (info->channel <= STMPE_ADC_LAST_NR) {
 		int int_sta;
@@ -263,6 +256,7 @@ static int stmpe_adc_probe(struct platform_device *pdev)
 	struct stmpe_adc *info;
 	struct device_node *np;
 	u32 norequest_mask = 0;
+	unsigned long bits;
 	int irq_temp, irq_adc;
 	int num_chan = 0;
 	int i = 0;
@@ -304,7 +298,6 @@ static int stmpe_adc_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, indio_dev);
 
 	indio_dev->name		= dev_name(&pdev->dev);
-	indio_dev->dev.parent	= &pdev->dev;
 	indio_dev->info		= &stmpe_adc_iio_info;
 	indio_dev->modes	= INDIO_DIRECT_MODE;
 
@@ -317,8 +310,8 @@ static int stmpe_adc_probe(struct platform_device *pdev)
 
 	of_property_read_u32(np, "st,norequest-mask", &norequest_mask);
 
-	for_each_clear_bit(i, (unsigned long *) &norequest_mask,
-			   (STMPE_ADC_LAST_NR + 1)) {
+	bits = norequest_mask;
+	for_each_clear_bit(i, &bits, (STMPE_ADC_LAST_NR + 1)) {
 		stmpe_adc_voltage_chan(&info->stmpe_adc_iio_channels[num_chan], i);
 		num_chan++;
 	}
@@ -331,10 +324,16 @@ static int stmpe_adc_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
+	stmpe_reg_write(info->stmpe, STMPE_REG_ADC_INT_EN,
+			~(norequest_mask & 0xFF));
+
+	stmpe_reg_write(info->stmpe, STMPE_REG_ADC_INT_STA,
+			~(norequest_mask & 0xFF));
+
 	return devm_iio_device_register(&pdev->dev, indio_dev);
 }
 
-static int __maybe_unused stmpe_adc_resume(struct device *dev)
+static int stmpe_adc_resume(struct device *dev)
 {
 	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct stmpe_adc *info = iio_priv(indio_dev);
@@ -344,16 +343,22 @@ static int __maybe_unused stmpe_adc_resume(struct device *dev)
 	return 0;
 }
 
-static SIMPLE_DEV_PM_OPS(stmpe_adc_pm_ops, NULL, stmpe_adc_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(stmpe_adc_pm_ops, NULL, stmpe_adc_resume);
+
+static const struct of_device_id stmpe_adc_ids[] = {
+	{ .compatible = "st,stmpe-adc", },
+	{ }
+};
+MODULE_DEVICE_TABLE(of, stmpe_adc_ids);
 
 static struct platform_driver stmpe_adc_driver = {
 	.probe		= stmpe_adc_probe,
 	.driver		= {
 		.name	= "stmpe-adc",
-		.pm	= &stmpe_adc_pm_ops,
+		.pm	= pm_sleep_ptr(&stmpe_adc_pm_ops),
+		.of_match_table = stmpe_adc_ids,
 	},
 };
-
 module_platform_driver(stmpe_adc_driver);
 
 MODULE_AUTHOR("Stefan Agner <stefan.agner@toradex.com>");

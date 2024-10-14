@@ -103,10 +103,10 @@ static void cougar_fix_g6_mapping(void)
 /*
  * Constant-friendly rdesc fixup for mouse interface
  */
-static __u8 *cougar_report_fixup(struct hid_device *hdev, __u8 *rdesc,
-				 unsigned int *rsize)
+static const __u8 *cougar_report_fixup(struct hid_device *hdev, __u8 *rdesc,
+				       unsigned int *rsize)
 {
-	if (rdesc[2] == 0x09 && rdesc[3] == 0x02 &&
+	if (*rsize >= 117 && rdesc[2] == 0x09 && rdesc[3] == 0x02 &&
 	    (rdesc[115] | rdesc[116] << 8) >= HID_MAX_USAGES) {
 		hid_info(hdev,
 			"usage count exceeds max: fixing up report descriptor\n");
@@ -179,10 +179,9 @@ static int cougar_bind_shared_data(struct hid_device *hdev,
 
 	cougar->shared = shared;
 
-	error = devm_add_action(&hdev->dev, cougar_remove_shared_data, cougar);
+	error = devm_add_action_or_reset(&hdev->dev, cougar_remove_shared_data, cougar);
 	if (error) {
 		mutex_unlock(&cougar_udev_list_lock);
-		cougar_remove_shared_data(cougar);
 		return error;
 	}
 
@@ -207,7 +206,7 @@ static int cougar_probe(struct hid_device *hdev,
 	error = hid_parse(hdev);
 	if (error) {
 		hid_err(hdev, "parse failed\n");
-		goto fail;
+		return error;
 	}
 
 	if (hdev->collection->usage == COUGAR_VENDOR_USAGE) {
@@ -219,7 +218,7 @@ static int cougar_probe(struct hid_device *hdev,
 	error = hid_hw_start(hdev, connect_mask);
 	if (error) {
 		hid_err(hdev, "hw start failed\n");
-		goto fail;
+		return error;
 	}
 
 	error = cougar_bind_shared_data(hdev, cougar);
@@ -249,8 +248,6 @@ static int cougar_probe(struct hid_device *hdev,
 
 fail_stop_and_cleanup:
 	hid_hw_stop(hdev);
-fail:
-	hid_set_drvdata(hdev, NULL);
 	return error;
 }
 
@@ -323,7 +320,7 @@ static const struct kernel_param_ops cougar_g6_is_space_ops = {
 };
 module_param_cb(g6_is_space, &cougar_g6_is_space_ops, &g6_is_space, 0644);
 
-static struct hid_device_id cougar_id_table[] = {
+static const struct hid_device_id cougar_id_table[] = {
 	{ HID_USB_DEVICE(USB_VENDOR_ID_SOLID_YEAR,
 			 USB_DEVICE_ID_COUGAR_500K_GAMING_KEYBOARD) },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_SOLID_YEAR,

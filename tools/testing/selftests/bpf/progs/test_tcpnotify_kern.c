@@ -10,25 +10,23 @@
 #include <linux/types.h>
 #include <linux/socket.h>
 #include <linux/tcp.h>
-#include "bpf_helpers.h"
-#include "bpf_endian.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
 #include "test_tcpnotify.h"
 
-struct bpf_map_def SEC("maps") global_map = {
-	.type = BPF_MAP_TYPE_ARRAY,
-	.key_size = sizeof(__u32),
-	.value_size = sizeof(struct tcpnotify_globals),
-	.max_entries = 4,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 4);
+	__type(key, __u32);
+	__type(value, struct tcpnotify_globals);
+} global_map SEC(".maps");
 
-struct bpf_map_def SEC("maps") perf_event_map = {
-	.type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
-	.key_size = sizeof(int),
-	.value_size = sizeof(__u32),
-	.max_entries = 2,
-};
-
-int _version SEC("version") = 1;
+struct {
+	__uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+	__uint(max_entries, 2);
+	__type(key, int);
+	__type(value, __u32);
+} perf_event_map SEC(".maps");
 
 SEC("sockops")
 int bpf_testcb(struct bpf_sock_ops *skops)

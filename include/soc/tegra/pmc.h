@@ -1,19 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2010 Google, Inc
  * Copyright (c) 2014 NVIDIA Corporation
  *
  * Author:
  *	Colin Cross <ccross@google.com>
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 
 #ifndef __SOC_TEGRA_PMC_H__
@@ -122,13 +113,14 @@ enum tegra_io_pad {
 	TEGRA_IO_PAD_PEX_CLK_BIAS,
 	TEGRA_IO_PAD_PEX_CLK1,
 	TEGRA_IO_PAD_PEX_CLK2,
-	TEGRA_IO_PAD_PEX_CLK2_BIAS,
 	TEGRA_IO_PAD_PEX_CLK3,
+	TEGRA_IO_PAD_PEX_CLK_2_BIAS,
+	TEGRA_IO_PAD_PEX_CLK_2,
 	TEGRA_IO_PAD_PEX_CNTRL,
 	TEGRA_IO_PAD_PEX_CTL2,
-	TEGRA_IO_PAD_PEX_L0_RST_N,
-	TEGRA_IO_PAD_PEX_L1_RST_N,
-	TEGRA_IO_PAD_PEX_L5_RST_N,
+	TEGRA_IO_PAD_PEX_L0_RST,
+	TEGRA_IO_PAD_PEX_L1_RST,
+	TEGRA_IO_PAD_PEX_L5_RST,
 	TEGRA_IO_PAD_PWR_CTL,
 	TEGRA_IO_PAD_SDMMC1,
 	TEGRA_IO_PAD_SDMMC1_HV,
@@ -156,10 +148,6 @@ enum tegra_io_pad {
 	TEGRA_IO_PAD_AO_HV,
 };
 
-/* deprecated, use TEGRA_IO_PAD_{HDMI,LVDS} instead */
-#define TEGRA_IO_RAIL_HDMI	TEGRA_IO_PAD_HDMI
-#define TEGRA_IO_RAIL_LVDS	TEGRA_IO_PAD_LVDS
-
 #ifdef CONFIG_SOC_TEGRA_PMC
 int tegra_powergate_power_on(unsigned int id);
 int tegra_powergate_power_off(unsigned int id);
@@ -172,13 +160,10 @@ int tegra_powergate_sequence_power_up(unsigned int id, struct clk *clk,
 int tegra_io_pad_power_enable(enum tegra_io_pad id);
 int tegra_io_pad_power_disable(enum tegra_io_pad id);
 
-/* deprecated, use tegra_io_pad_power_{enable,disable}() instead */
-int tegra_io_rail_power_on(unsigned int id);
-int tegra_io_rail_power_off(unsigned int id);
-
-enum tegra_suspend_mode tegra_pmc_get_suspend_mode(void);
 void tegra_pmc_set_suspend_mode(enum tegra_suspend_mode mode);
 void tegra_pmc_enter_suspend_mode(enum tegra_suspend_mode mode);
+
+bool tegra_pmc_core_domain_state_synced(void);
 
 #else
 static inline int tegra_powergate_power_on(unsigned int id)
@@ -218,21 +203,6 @@ static inline int tegra_io_pad_get_voltage(enum tegra_io_pad id)
 	return -ENOSYS;
 }
 
-static inline int tegra_io_rail_power_on(unsigned int id)
-{
-	return -ENOSYS;
-}
-
-static inline int tegra_io_rail_power_off(unsigned int id)
-{
-	return -ENOSYS;
-}
-
-static inline enum tegra_suspend_mode tegra_pmc_get_suspend_mode(void)
-{
-	return TEGRA_SUSPEND_NONE;
-}
-
 static inline void tegra_pmc_set_suspend_mode(enum tegra_suspend_mode mode)
 {
 }
@@ -241,6 +211,20 @@ static inline void tegra_pmc_enter_suspend_mode(enum tegra_suspend_mode mode)
 {
 }
 
+static inline bool tegra_pmc_core_domain_state_synced(void)
+{
+	return false;
+}
+
 #endif /* CONFIG_SOC_TEGRA_PMC */
+
+#if defined(CONFIG_SOC_TEGRA_PMC) && defined(CONFIG_PM_SLEEP)
+enum tegra_suspend_mode tegra_pmc_get_suspend_mode(void);
+#else
+static inline enum tegra_suspend_mode tegra_pmc_get_suspend_mode(void)
+{
+	return TEGRA_SUSPEND_NONE;
+}
+#endif
 
 #endif /* __SOC_TEGRA_PMC_H__ */

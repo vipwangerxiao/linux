@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Overview:
  *   Platform independent driver for NDFC (NanD Flash Controller)
@@ -14,22 +15,16 @@
  *  Copyright 2006 IBM
  *  Copyright 2008 PIKA Technologies
  *    Sean MacLennan <smaclennan@pikatech.com>
- *
- *  This program is free software; you can redistribute	 it and/or modify it
- *  under  the terms of	 the GNU General  Public License as published by the
- *  Free Software Foundation;  either version 2 of the	License, or (at your
- *  option) any later version.
- *
  */
 #include <linux/module.h>
 #include <linux/mtd/rawnand.h>
-#include <linux/mtd/nand_ecc.h>
 #include <linux/mtd/partitions.h>
 #include <linux/mtd/ndfc.h>
 #include <linux/slab.h>
 #include <linux/mtd/mtd.h>
+#include <linux/of.h>
 #include <linux/of_address.h>
-#include <linux/of_platform.h>
+#include <linux/platform_device.h>
 #include <asm/io.h>
 
 #define NDFC_MAX_CS    4
@@ -151,10 +146,10 @@ static int ndfc_chip_init(struct ndfc_controller *ndfc,
 	chip->controller = &ndfc->ndfc_control;
 	chip->legacy.read_buf = ndfc_read_buf;
 	chip->legacy.write_buf = ndfc_write_buf;
-	chip->ecc.correct = nand_correct_data;
+	chip->ecc.correct = rawnand_sw_hamming_correct;
 	chip->ecc.hwctl = ndfc_enable_hwecc;
 	chip->ecc.calculate = ndfc_calculate_ecc;
-	chip->ecc.mode = NAND_ECC_HW;
+	chip->ecc.engine_type = NAND_ECC_ENGINE_TYPE_ON_HOST;
 	chip->ecc.size = 256;
 	chip->ecc.bytes = 3;
 	chip->ecc.strength = 1;
@@ -246,15 +241,17 @@ static int ndfc_probe(struct platform_device *ofdev)
 	return 0;
 }
 
-static int ndfc_remove(struct platform_device *ofdev)
+static void ndfc_remove(struct platform_device *ofdev)
 {
 	struct ndfc_controller *ndfc = dev_get_drvdata(&ofdev->dev);
-	struct mtd_info *mtd = nand_to_mtd(&ndfc->chip);
+	struct nand_chip *chip = &ndfc->chip;
+	struct mtd_info *mtd = nand_to_mtd(chip);
+	int ret;
 
-	nand_release(&ndfc->chip);
+	ret = mtd_device_unregister(mtd);
+	WARN_ON(ret);
+	nand_cleanup(chip);
 	kfree(mtd->name);
-
-	return 0;
 }
 
 static const struct of_device_id ndfc_match[] = {
@@ -269,7 +266,7 @@ static struct platform_driver ndfc_driver = {
 		.of_match_table = ndfc_match,
 	},
 	.probe = ndfc_probe,
-	.remove = ndfc_remove,
+	.remove_new = ndfc_remove,
 };
 
 module_platform_driver(ndfc_driver);

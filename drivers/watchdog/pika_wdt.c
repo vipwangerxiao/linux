@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * PIKA FPGA based Watchdog Timer
  *
@@ -22,8 +23,8 @@
 #include <linux/bitops.h>
 #include <linux/uaccess.h>
 #include <linux/io.h>
+#include <linux/of.h>
 #include <linux/of_address.h>
-#include <linux/of_platform.h>
 
 #define DRV_NAME "PIKA-WDT"
 
@@ -208,11 +209,11 @@ static long pikawdt_ioctl(struct file *file,
 
 static const struct file_operations pikawdt_fops = {
 	.owner		= THIS_MODULE,
-	.llseek		= no_llseek,
 	.open		= pikawdt_open,
 	.release	= pikawdt_release,
 	.write		= pikawdt_write,
 	.unlocked_ioctl	= pikawdt_ioctl,
+	.compat_ioctl	= compat_ptr_ioctl,
 };
 
 static struct miscdevice pikawdt_miscdev = {

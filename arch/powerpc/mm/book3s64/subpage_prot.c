@@ -1,21 +1,17 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2007-2008 Paul Mackerras, IBM Corp.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/gfp.h>
 #include <linux/types.h>
-#include <linux/mm.h>
+#include <linux/pagewalk.h>
 #include <linux/hugetlb.h>
 #include <linux/syscalls.h>
 
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <linux/uaccess.h>
 
 /*
@@ -58,21 +54,25 @@ static void hpte_flush_range(struct mm_struct *mm, unsigned long addr,
 			     int npages)
 {
 	pgd_t *pgd;
+	p4d_t *p4d;
 	pud_t *pud;
 	pmd_t *pmd;
 	pte_t *pte;
 	spinlock_t *ptl;
 
 	pgd = pgd_offset(mm, addr);
-	if (pgd_none(*pgd))
+	p4d = p4d_offset(pgd, addr);
+	if (p4d_none(*p4d))
 		return;
-	pud = pud_offset(pgd, addr);
+	pud = pud_offset(p4d, addr);
 	if (pud_none(*pud))
 		return;
 	pmd = pmd_offset(pud, addr);
 	if (pmd_none(*pmd))
 		return;
 	pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
+	if (!pte)
+		return;
 	arch_enter_lazy_mmu_mode();
 	for (; npages > 0; --npages) {
 		pte_update(mm, addr, pte, 0, 0, 0);
@@ -96,7 +96,7 @@ static void subpage_prot_clear(unsigned long addr, unsigned long len)
 	size_t nw;
 	unsigned long next, limit;
 
-	down_write(&mm->mmap_sem);
+	mmap_write_lock(mm);
 
 	spt = mm_ctx_subpage_prot(&mm->context);
 	if (!spt)
@@ -131,7 +131,7 @@ static void subpage_prot_clear(unsigned long addr, unsigned long len)
 	}
 
 err_out:
-	up_write(&mm->mmap_sem);
+	mmap_write_unlock(mm);
 }
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
@@ -143,32 +143,24 @@ static int subpage_walk_pmd_entry(pmd_t *pmd, unsigned long addr,
 	return 0;
 }
 
+static const struct mm_walk_ops subpage_walk_ops = {
+	.pmd_entry	= subpage_walk_pmd_entry,
+	.walk_lock	= PGWALK_WRLOCK_VERIFY,
+};
+
 static void subpage_mark_vma_nohuge(struct mm_struct *mm, unsigned long addr,
 				    unsigned long len)
 {
 	struct vm_area_struct *vma;
-	struct mm_walk subpage_proto_walk = {
-		.mm = mm,
-		.pmd_entry = subpage_walk_pmd_entry,
-	};
+	VMA_ITERATOR(vmi, mm, addr);
 
 	/*
 	 * We don't try too hard, we just mark all the vma in that range
 	 * VM_NOHUGEPAGE and split them.
 	 */
-	vma = find_vma(mm, addr);
-	/*
-	 * If the range is in unmapped range, just return
-	 */
-	if (vma && ((addr + len) <= vma->vm_start))
-		return;
-
-	while (vma) {
-		if (vma->vm_start >= (addr + len))
-			break;
-		vma->vm_flags |= VM_NOHUGEPAGE;
-		walk_page_vma(vma, &subpage_proto_walk);
-		vma = vma->vm_next;
+	for_each_vma_range(vmi, vma, addr + len) {
+		vm_flags_set(vma, VM_NOHUGEPAGE);
+		walk_page_vma(vma, &subpage_walk_ops, NULL);
 	}
 }
 #else
@@ -221,13 +213,13 @@ SYSCALL_DEFINE3(subpage_prot, unsigned long, addr,
 	if (!access_ok(map, (len >> PAGE_SHIFT) * sizeof(u32)))
 		return -EFAULT;
 
-	down_write(&mm->mmap_sem);
+	mmap_write_lock(mm);
 
 	spt = mm_ctx_subpage_prot(&mm->context);
 	if (!spt) {
 		/*
 		 * Allocate subpage prot table if not already done.
-		 * Do this with mmap_sem held
+		 * Do this with mmap_lock held
 		 */
 		spt = kzalloc(sizeof(struct subpage_prot_table), GFP_KERNEL);
 		if (!spt) {
@@ -271,11 +263,11 @@ SYSCALL_DEFINE3(subpage_prot, unsigned long, addr,
 		if (addr + (nw << PAGE_SHIFT) > next)
 			nw = (next - addr) >> PAGE_SHIFT;
 
-		up_write(&mm->mmap_sem);
+		mmap_write_unlock(mm);
 		if (__copy_from_user(spp, map, nw * sizeof(u32)))
 			return -EFAULT;
 		map += nw;
-		down_write(&mm->mmap_sem);
+		mmap_write_lock(mm);
 
 		/* now flush any existing HPTEs for the range */
 		hpte_flush_range(mm, addr, nw);
@@ -284,6 +276,6 @@ SYSCALL_DEFINE3(subpage_prot, unsigned long, addr,
 		spt->maxaddr = limit;
 	err = 0;
  out:
-	up_write(&mm->mmap_sem);
+	mmap_write_unlock(mm);
 	return err;
 }

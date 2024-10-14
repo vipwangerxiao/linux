@@ -12,13 +12,14 @@
 #include <linux/platform_device.h>
 #include <linux/reset-controller.h>
 #include <linux/mfd/syscon.h>
+#include <linux/module.h>
 #include "meson-aoclk.h"
-#include "axg-aoclk.h"
 
 #include "clk-regmap.h"
 #include "clk-dualdiv.h"
 
-#define IN_PREFIX "ao-in-"
+#include <dt-bindings/clock/axg-aoclkc.h>
+#include <dt-bindings/reset/axg-aoclkc.h>
 
 /*
  * AO Configuration Clock registers offsets
@@ -42,7 +43,9 @@ static struct clk_regmap axg_aoclk_##_name = {				\
 	.hw.init = &(struct clk_init_data) {				\
 		.name =  "axg_ao_" #_name,				\
 		.ops = &clk_regmap_gate_ops,				\
-		.parent_names = (const char *[]){ IN_PREFIX "mpeg-clk" }, \
+		.parent_data = &(const struct clk_parent_data) {	\
+			.fw_name = "mpeg-clk",				\
+		},							\
 		.num_parents = 1,					\
 		.flags = CLK_IGNORE_UNUSED,				\
 	},								\
@@ -64,7 +67,9 @@ static struct clk_regmap axg_aoclk_cts_oscin = {
 	.hw.init = &(struct clk_init_data){
 		.name = "cts_oscin",
 		.ops = &clk_regmap_gate_ro_ops,
-		.parent_names = (const char *[]){ IN_PREFIX "xtal" },
+		.parent_data = &(const struct clk_parent_data) {
+			.fw_name = "xtal",
+		},
 		.num_parents = 1,
 	},
 };
@@ -77,7 +82,9 @@ static struct clk_regmap axg_aoclk_32k_pre = {
 	.hw.init = &(struct clk_init_data){
 		.name = "axg_ao_32k_pre",
 		.ops = &clk_regmap_gate_ops,
-		.parent_names = (const char *[]){ "cts_oscin" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&axg_aoclk_cts_oscin.hw
+		},
 		.num_parents = 1,
 	},
 };
@@ -124,7 +131,9 @@ static struct clk_regmap axg_aoclk_32k_div = {
 	.hw.init = &(struct clk_init_data){
 		.name = "axg_ao_32k_div",
 		.ops = &meson_clk_dualdiv_ops,
-		.parent_names = (const char *[]){ "axg_ao_32k_pre" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&axg_aoclk_32k_pre.hw
+		},
 		.num_parents = 1,
 	},
 };
@@ -139,8 +148,10 @@ static struct clk_regmap axg_aoclk_32k_sel = {
 	.hw.init = &(struct clk_init_data){
 		.name = "axg_ao_32k_sel",
 		.ops = &clk_regmap_mux_ops,
-		.parent_names = (const char *[]){ "axg_ao_32k_div",
-						  "axg_ao_32k_pre" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&axg_aoclk_32k_div.hw,
+			&axg_aoclk_32k_pre.hw,
+		},
 		.num_parents = 2,
 		.flags = CLK_SET_RATE_PARENT,
 	},
@@ -154,7 +165,9 @@ static struct clk_regmap axg_aoclk_32k = {
 	.hw.init = &(struct clk_init_data){
 		.name = "axg_ao_32k",
 		.ops = &clk_regmap_gate_ops,
-		.parent_names = (const char *[]){ "axg_ao_32k_sel" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&axg_aoclk_32k_sel.hw
+		},
 		.num_parents = 1,
 		.flags = CLK_SET_RATE_PARENT,
 	},
@@ -170,8 +183,10 @@ static struct clk_regmap axg_aoclk_cts_rtc_oscin = {
 	.hw.init = &(struct clk_init_data){
 		.name = "axg_ao_cts_rtc_oscin",
 		.ops = &clk_regmap_mux_ops,
-		.parent_names = (const char *[]){ "axg_ao_32k",
-						  IN_PREFIX "ext_32k-0" },
+		.parent_data = (const struct clk_parent_data []) {
+			{ .hw = &axg_aoclk_32k.hw },
+			{ .fw_name = "ext_32k-0", },
+		},
 		.num_parents = 2,
 		.flags = CLK_SET_RATE_PARENT,
 	},
@@ -187,8 +202,10 @@ static struct clk_regmap axg_aoclk_clk81 = {
 	.hw.init = &(struct clk_init_data){
 		.name = "axg_ao_clk81",
 		.ops = &clk_regmap_mux_ro_ops,
-		.parent_names = (const char *[]){ IN_PREFIX "mpeg-clk",
-						  "axg_ao_cts_rtc_oscin"},
+		.parent_data = (const struct clk_parent_data []) {
+			{ .fw_name = "mpeg-clk", },
+			{ .hw = &axg_aoclk_cts_rtc_oscin.hw },
+		},
 		.num_parents = 2,
 		.flags = CLK_SET_RATE_PARENT,
 	},
@@ -203,8 +220,10 @@ static struct clk_regmap axg_aoclk_saradc_mux = {
 	.hw.init = &(struct clk_init_data){
 		.name = "axg_ao_saradc_mux",
 		.ops = &clk_regmap_mux_ops,
-		.parent_names = (const char *[]){ IN_PREFIX "xtal",
-						  "axg_ao_clk81" },
+		.parent_data = (const struct clk_parent_data []) {
+			{ .fw_name = "xtal", },
+			{ .hw = &axg_aoclk_clk81.hw },
+		},
 		.num_parents = 2,
 	},
 };
@@ -218,7 +237,9 @@ static struct clk_regmap axg_aoclk_saradc_div = {
 	.hw.init = &(struct clk_init_data){
 		.name = "axg_ao_saradc_div",
 		.ops = &clk_regmap_divider_ops,
-		.parent_names = (const char *[]){ "axg_ao_saradc_mux" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&axg_aoclk_saradc_mux.hw
+		},
 		.num_parents = 1,
 		.flags = CLK_SET_RATE_PARENT,
 	},
@@ -232,7 +253,9 @@ static struct clk_regmap axg_aoclk_saradc_gate = {
 	.hw.init = &(struct clk_init_data){
 		.name = "axg_ao_saradc_gate",
 		.ops = &clk_regmap_gate_ops,
-		.parent_names = (const char *[]){ "axg_ao_saradc_div" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&axg_aoclk_saradc_div.hw
+		},
 		.num_parents = 1,
 		.flags = CLK_SET_RATE_PARENT,
 	},
@@ -267,33 +290,24 @@ static struct clk_regmap *axg_aoclk_regmap[] = {
 	&axg_aoclk_saradc_gate,
 };
 
-static const struct clk_hw_onecell_data axg_aoclk_onecell_data = {
-	.hws = {
-		[CLKID_AO_REMOTE]	= &axg_aoclk_remote.hw,
-		[CLKID_AO_I2C_MASTER]	= &axg_aoclk_i2c_master.hw,
-		[CLKID_AO_I2C_SLAVE]	= &axg_aoclk_i2c_slave.hw,
-		[CLKID_AO_UART1]	= &axg_aoclk_uart1.hw,
-		[CLKID_AO_UART2]	= &axg_aoclk_uart2.hw,
-		[CLKID_AO_IR_BLASTER]	= &axg_aoclk_ir_blaster.hw,
-		[CLKID_AO_SAR_ADC]	= &axg_aoclk_saradc.hw,
-		[CLKID_AO_CLK81]	= &axg_aoclk_clk81.hw,
-		[CLKID_AO_SAR_ADC_SEL]	= &axg_aoclk_saradc_mux.hw,
-		[CLKID_AO_SAR_ADC_DIV]	= &axg_aoclk_saradc_div.hw,
-		[CLKID_AO_SAR_ADC_CLK]	= &axg_aoclk_saradc_gate.hw,
-		[CLKID_AO_CTS_OSCIN]	= &axg_aoclk_cts_oscin.hw,
-		[CLKID_AO_32K_PRE]	= &axg_aoclk_32k_pre.hw,
-		[CLKID_AO_32K_DIV]	= &axg_aoclk_32k_div.hw,
-		[CLKID_AO_32K_SEL]	= &axg_aoclk_32k_sel.hw,
-		[CLKID_AO_32K]		= &axg_aoclk_32k.hw,
-		[CLKID_AO_CTS_RTC_OSCIN] = &axg_aoclk_cts_rtc_oscin.hw,
-	},
-	.num = NR_CLKS,
-};
-
-static const struct meson_aoclk_input axg_aoclk_inputs[] = {
-	{ .name = "xtal",	.required = true  },
-	{ .name = "mpeg-clk",	.required = true  },
-	{ .name = "ext-32k-0",	.required = false },
+static struct clk_hw *axg_aoclk_hw_clks[] = {
+	[CLKID_AO_REMOTE]	= &axg_aoclk_remote.hw,
+	[CLKID_AO_I2C_MASTER]	= &axg_aoclk_i2c_master.hw,
+	[CLKID_AO_I2C_SLAVE]	= &axg_aoclk_i2c_slave.hw,
+	[CLKID_AO_UART1]	= &axg_aoclk_uart1.hw,
+	[CLKID_AO_UART2]	= &axg_aoclk_uart2.hw,
+	[CLKID_AO_IR_BLASTER]	= &axg_aoclk_ir_blaster.hw,
+	[CLKID_AO_SAR_ADC]	= &axg_aoclk_saradc.hw,
+	[CLKID_AO_CLK81]	= &axg_aoclk_clk81.hw,
+	[CLKID_AO_SAR_ADC_SEL]	= &axg_aoclk_saradc_mux.hw,
+	[CLKID_AO_SAR_ADC_DIV]	= &axg_aoclk_saradc_div.hw,
+	[CLKID_AO_SAR_ADC_CLK]	= &axg_aoclk_saradc_gate.hw,
+	[CLKID_AO_CTS_OSCIN]	= &axg_aoclk_cts_oscin.hw,
+	[CLKID_AO_32K_PRE]	= &axg_aoclk_32k_pre.hw,
+	[CLKID_AO_32K_DIV]	= &axg_aoclk_32k_div.hw,
+	[CLKID_AO_32K_SEL]	= &axg_aoclk_32k_sel.hw,
+	[CLKID_AO_32K]		= &axg_aoclk_32k.hw,
+	[CLKID_AO_CTS_RTC_OSCIN] = &axg_aoclk_cts_rtc_oscin.hw,
 };
 
 static const struct meson_aoclk_data axg_aoclkc_data = {
@@ -302,10 +316,10 @@ static const struct meson_aoclk_data axg_aoclkc_data = {
 	.reset		= axg_aoclk_reset,
 	.num_clks	= ARRAY_SIZE(axg_aoclk_regmap),
 	.clks		= axg_aoclk_regmap,
-	.hw_data	= &axg_aoclk_onecell_data,
-	.inputs		= axg_aoclk_inputs,
-	.num_inputs	= ARRAY_SIZE(axg_aoclk_inputs),
-	.input_prefix	= IN_PREFIX,
+	.hw_clks	= {
+		.hws	= axg_aoclk_hw_clks,
+		.num	= ARRAY_SIZE(axg_aoclk_hw_clks),
+	},
 };
 
 static const struct of_device_id axg_aoclkc_match_table[] = {
@@ -315,6 +329,7 @@ static const struct of_device_id axg_aoclkc_match_table[] = {
 	},
 	{ }
 };
+MODULE_DEVICE_TABLE(of, axg_aoclkc_match_table);
 
 static struct platform_driver axg_aoclkc_driver = {
 	.probe		= meson_aoclkc_probe,
@@ -323,5 +338,8 @@ static struct platform_driver axg_aoclkc_driver = {
 		.of_match_table = axg_aoclkc_match_table,
 	},
 };
+module_platform_driver(axg_aoclkc_driver);
 
-builtin_platform_driver(axg_aoclkc_driver);
+MODULE_DESCRIPTION("Amlogic AXG Always-ON Clock Controller driver");
+MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS(CLK_MESON);

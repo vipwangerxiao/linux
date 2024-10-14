@@ -23,7 +23,6 @@
 #include <linux/cpumask.h>
 #include <linux/cpu.h>
 #include <linux/smp.h>
-#include <linux/sched.h>	/* set_cpus_allowed() */
 #include <linux/clk.h>
 #include <linux/percpu.h>
 #include <linux/sh_clk.h>
@@ -87,7 +86,7 @@ static int sh_cpufreq_target(struct cpufreq_policy *policy,
 	return work_on_cpu(policy->cpu, __sh_cpufreq_target, &data);
 }
 
-static int sh_cpufreq_verify(struct cpufreq_policy *policy)
+static int sh_cpufreq_verify(struct cpufreq_policy_data *policy)
 {
 	struct clk *cpuclk = &per_cpu(sh_cpuclk, policy->cpu);
 	struct cpufreq_frequency_table *freq_table;
@@ -136,24 +135,12 @@ static int sh_cpufreq_cpu_init(struct cpufreq_policy *policy)
 	return 0;
 }
 
-static int sh_cpufreq_cpu_exit(struct cpufreq_policy *policy)
+static void sh_cpufreq_cpu_exit(struct cpufreq_policy *policy)
 {
 	unsigned int cpu = policy->cpu;
 	struct clk *cpuclk = &per_cpu(sh_cpuclk, cpu);
 
 	clk_put(cpuclk);
-
-	return 0;
-}
-
-static void sh_cpufreq_cpu_ready(struct cpufreq_policy *policy)
-{
-	struct device *dev = get_cpu_device(policy->cpu);
-
-	dev_info(dev, "CPU Frequencies - Minimum %u.%03u MHz, "
-	       "Maximum %u.%03u MHz.\n",
-	       policy->min / 1000, policy->min % 1000,
-	       policy->max / 1000, policy->max % 1000);
 }
 
 static struct cpufreq_driver sh_cpufreq_driver = {
@@ -164,7 +151,6 @@ static struct cpufreq_driver sh_cpufreq_driver = {
 	.verify		= sh_cpufreq_verify,
 	.init		= sh_cpufreq_cpu_init,
 	.exit		= sh_cpufreq_cpu_exit,
-	.ready		= sh_cpufreq_cpu_ready,
 	.attr		= cpufreq_generic_attr,
 };
 

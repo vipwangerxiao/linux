@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * vSMPowered(tm) systems specific initialization
  * Copyright (C) 2005 ScaleMP Inc.
- *
- * Use of this code is subject to the terms and conditions of the
- * GNU general public license version 2. See "COPYING" or
- * http://www.gnu.org/licenses/gpl.html
  *
  * Ravikiran Thirumalai <kiran@scalemp.com>,
  * Shai Fultheim <shai@scalemp.com>
@@ -130,24 +127,11 @@ static void __init vsmp_cap_cpus(void)
 #endif
 }
 
-static int apicid_phys_pkg_id(int initial_apic_id, int index_msb)
-{
-	return hard_smp_processor_id() >> index_msb;
-}
-
-static void vsmp_apic_post_init(void)
-{
-	/* need to update phys_pkg_id */
-	apic->phys_pkg_id = apicid_phys_pkg_id;
-}
-
 void __init vsmp_init(void)
 {
 	detect_vsmp_box();
 	if (!is_vsmp_box())
 		return;
-
-	x86_platform.apic_post_init = vsmp_apic_post_init;
 
 	vsmp_cap_cpus();
 

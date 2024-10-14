@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * An hwmon driver for the Analog Devices AD7416/17/18
  * Copyright (C) 2006-07 Tower Technologies
@@ -6,10 +7,6 @@
  *
  * Based on lm75.c
  * Copyright (C) 1998-99 Frodo Looijaard <frodol@dds.nl>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License,
- * as published by the Free Software Foundation - version 2.
  */
 
 #include <linux/module.h>
@@ -19,7 +16,7 @@
 #include <linux/hwmon-sysfs.h>
 #include <linux/err.h>
 #include <linux/mutex.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
 
@@ -49,7 +46,7 @@ struct ad7418_data {
 	enum chips		type;
 	struct mutex		lock;
 	int			adc_max;	/* number of ADC channels */
-	char			valid;
+	bool			valid;
 	unsigned long		last_updated;	/* In jiffies */
 	s16			temp[3];	/* Register values */
 	u16			in[4];
@@ -114,14 +111,14 @@ static int ad7418_update_device(struct device *dev)
 			goto abort;
 
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 	}
 
 	mutex_unlock(&data->lock);
 	return 0;
 
 abort:
-	data->valid = 0;
+	data->valid = false;
 	mutex_unlock(&data->lock);
 	return val;
 }
@@ -233,8 +230,7 @@ static void ad7418_init_client(struct i2c_client *client)
 	}
 }
 
-static int ad7418_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int ad7418_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct i2c_adapter *adapter = client->adapter;
@@ -254,10 +250,7 @@ static int ad7418_probe(struct i2c_client *client,
 
 	mutex_init(&data->lock);
 	data->client = client;
-	if (dev->of_node)
-		data->type = (enum chips)of_device_get_match_data(dev);
-	else
-		data->type = id->driver_data;
+	data->type = (uintptr_t)i2c_get_match_data(client);
 
 	switch (data->type) {
 	case ad7416:

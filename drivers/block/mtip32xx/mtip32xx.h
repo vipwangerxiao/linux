@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * mtip32xx.h - Header file for the P320 SSD Block Driver
  *   Copyright (C) 2011 Micron Technology, Inc.
@@ -5,17 +6,6 @@
  * Portions of this code were derived from works subjected to the
  * following copyright:
  *    Copyright (C) 2009 Integrated Device Technology, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 
 #ifndef __MTIP32XX_H__
@@ -25,7 +15,6 @@
 #include <linux/rwsem.h>
 #include <linux/ata.h>
 #include <linux/interrupt.h>
-#include <linux/genhd.h>
 
 /* Offset of Subsystem Device ID in pci confoguration space */
 #define PCI_SUBSYSTEM_DEVICEID	0x2E
@@ -160,7 +149,6 @@ enum {
 	MTIP_DDF_RESUME_BIT         = 6,
 	MTIP_DDF_INIT_DONE_BIT      = 7,
 	MTIP_DDF_REBUILD_FAILED_BIT = 8,
-	MTIP_DDF_REMOVAL_BIT	    = 9,
 
 	MTIP_DDF_STOP_IO      = ((1 << MTIP_DDF_REMOVE_PENDING_BIT) |
 				(1 << MTIP_DDF_SEC_LOCK_BIT) |
@@ -472,12 +460,6 @@ struct driver_data {
 	struct mtip_work work[MTIP_MAX_SLOT_GROUPS];
 
 	int isr_binding;
-
-	struct block_device *bdev;
-
-	struct list_head online_list; /* linkage for online list */
-
-	struct list_head remove_list; /* linkage for removing list */
 
 	int unal_qdepth; /* qdepth of unaligned IO queue */
 };

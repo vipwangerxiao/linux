@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * This file is part of the APDS990x sensor driver.
  * Chip is combined proximity and ambient light sensor.
@@ -5,21 +6,6 @@
  * Copyright (C) 2010 Nokia Corporation and/or its subsidiary(-ies).
  *
  * Contact: Samu Onkalo <samu.p.onkalo@nokia.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
  */
 
 #include <linux/kernel.h>
@@ -639,15 +625,15 @@ static ssize_t apds990x_lux_show(struct device *dev,
 	struct apds990x_chip *chip = dev_get_drvdata(dev);
 	ssize_t ret;
 	u32 result;
-	long timeout;
+	long time_left;
 
 	if (pm_runtime_suspended(dev))
 		return -EIO;
 
-	timeout = wait_event_interruptible_timeout(chip->wait,
-						!chip->lux_wait_fresh_res,
-						msecs_to_jiffies(APDS_TIMEOUT));
-	if (!timeout)
+	time_left = wait_event_interruptible_timeout(chip->wait,
+						     !chip->lux_wait_fresh_res,
+						     msecs_to_jiffies(APDS_TIMEOUT));
+	if (!time_left)
 		return -EIO;
 
 	mutex_lock(&chip->mutex);
@@ -1065,8 +1051,7 @@ static const struct attribute_group apds990x_attribute_group[] = {
 	{.attrs = sysfs_attrs_ctrl },
 };
 
-static int apds990x_probe(struct i2c_client *client,
-				const struct i2c_device_id *id)
+static int apds990x_probe(struct i2c_client *client)
 {
 	struct apds990x_chip *chip;
 	int err;
@@ -1199,7 +1184,7 @@ fail1:
 	return err;
 }
 
-static int apds990x_remove(struct i2c_client *client)
+static void apds990x_remove(struct i2c_client *client)
 {
 	struct apds990x_chip *chip = i2c_get_clientdata(client);
 
@@ -1219,7 +1204,6 @@ static int apds990x_remove(struct i2c_client *client)
 	regulator_bulk_free(ARRAY_SIZE(chip->regs), chip->regs);
 
 	kfree(chip);
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -1269,7 +1253,7 @@ static int apds990x_runtime_resume(struct device *dev)
 #endif
 
 static const struct i2c_device_id apds990x_id[] = {
-	{"apds990x", 0 },
+	{ "apds990x" },
 	{}
 };
 
@@ -1283,11 +1267,11 @@ static const struct dev_pm_ops apds990x_pm_ops = {
 };
 
 static struct i2c_driver apds990x_driver = {
-	.driver	 = {
+	.driver	  = {
 		.name	= "apds990x",
 		.pm	= &apds990x_pm_ops,
 	},
-	.probe	  = apds990x_probe,
+	.probe    = apds990x_probe,
 	.remove	  = apds990x_remove,
 	.id_table = apds990x_id,
 };

@@ -3,7 +3,7 @@
 #include <linux/signal.h>
 #include <linux/uaccess.h>
 #include <linux/syscalls.h>
-#include <linux/tracehook.h>
+#include <linux/resume_user_mode.h>
 
 #include <asm/traps.h>
 #include <asm/ucontext.h>
@@ -39,6 +39,11 @@ static int save_fpu_state(struct sigcontext __user *sc)
 #endif
 
 struct rt_sigframe {
+	/*
+	 * pad[3] is compatible with the same struct defined in
+	 * gcc/libgcc/config/csky/linux-unwind.h
+	 */
+	int pad[3];
 	struct siginfo info;
 	struct ucontext uc;
 };
@@ -47,9 +52,13 @@ static long restore_sigcontext(struct pt_regs *regs,
 	struct sigcontext __user *sc)
 {
 	int err = 0;
+	unsigned long sr = regs->sr;
 
 	/* sc_pt_regs is structured the same as the start of pt_regs */
 	err |= __copy_from_user(regs, &sc->sc_pt_regs, sizeof(struct pt_regs));
+
+	/* BIT(0) of regs->sr is Condition Code/Carry bit */
+	regs->sr = (sr & ~1) | (regs->sr & 1);
 
 	/* Restore the floating-point state. */
 	err |= restore_fpu_state(sc);
@@ -61,7 +70,6 @@ SYSCALL_DEFINE0(rt_sigreturn)
 {
 	struct pt_regs *regs = current_pt_regs();
 	struct rt_sigframe __user *frame;
-	struct task_struct *task;
 	sigset_t set;
 
 	/* Always make any pending restarted system calls return -EINTR */
@@ -86,8 +94,7 @@ SYSCALL_DEFINE0(rt_sigreturn)
 	return regs->a0;
 
 badframe:
-	task = current;
-	force_sig(SIGSEGV, task);
+	force_sig(SIGSEGV);
 	return 0;
 }
 
@@ -129,9 +136,8 @@ static inline void __user *get_sigframe(struct ksignal *ksig,
 static int
 setup_rt_frame(struct ksignal *ksig, sigset_t *set, struct pt_regs *regs)
 {
-	struct rt_sigframe *frame;
+	struct rt_sigframe __user *frame;
 	int err = 0;
-	struct csky_vdso *vdso = current->mm->context.vdso;
 
 	frame = get_sigframe(ksig, regs, sizeof(*frame));
 	if (!access_ok(frame, sizeof(*frame)))
@@ -149,7 +155,8 @@ setup_rt_frame(struct ksignal *ksig, sigset_t *set, struct pt_regs *regs)
 		return -EFAULT;
 
 	/* Set up to return from userspace. */
-	regs->lr = (unsigned long)(vdso->rt_signal_retcode);
+	regs->lr = (unsigned long)VDSO_SYMBOL(
+		current->mm->context.vdso, rt_sigreturn);
 
 	/*
 	 * Set up registers for signal handler.
@@ -189,7 +196,7 @@ static void handle_signal(struct ksignal *ksig, struct pt_regs *regs)
 				regs->a0 = -EINTR;
 				break;
 			}
-			/* fallthrough */
+			fallthrough;
 		case -ERESTARTNOINTR:
 			regs->a0 = regs->orig_a0;
 			regs->pc -= TRAP0_SIZE;
@@ -248,12 +255,13 @@ static void do_signal(struct pt_regs *regs)
 asmlinkage void do_notify_resume(struct pt_regs *regs,
 	unsigned long thread_info_flags)
 {
+	if (thread_info_flags & _TIF_UPROBE)
+		uprobe_notify_resume(regs);
+
 	/* Handle pending signal delivery */
-	if (thread_info_flags & _TIF_SIGPENDING)
+	if (thread_info_flags & (_TIF_SIGPENDING | _TIF_NOTIFY_SIGNAL))
 		do_signal(regs);
 
-	if (thread_info_flags & _TIF_NOTIFY_RESUME) {
-		clear_thread_flag(TIF_NOTIFY_RESUME);
-		tracehook_notify_resume(regs);
-	}
+	if (thread_info_flags & _TIF_NOTIFY_RESUME)
+		resume_user_mode_work(regs);
 }

@@ -2,6 +2,7 @@
 #include <linux/compiler.h>
 #include <sys/types.h>
 #include <regex.h>
+#include <stdlib.h>
 
 struct arm64_annotate {
 	regex_t call_insn,
@@ -10,7 +11,8 @@ struct arm64_annotate {
 
 static int arm64_mov__parse(struct arch *arch __maybe_unused,
 			    struct ins_operands *ops,
-			    struct map_symbol *ms __maybe_unused)
+			    struct map_symbol *ms __maybe_unused,
+			    struct disasm_line *dl __maybe_unused)
 {
 	char *s = strchr(ops->raw, ','), *target, *endptr;
 
@@ -94,14 +96,14 @@ static int arm64__annotate_init(struct arch *arch, char *cpuid __maybe_unused)
 
 	arm = zalloc(sizeof(*arm));
 	if (!arm)
-		return -1;
+		return ENOMEM;
 
 	/* bl, blr */
 	err = regcomp(&arm->call_insn, "^blr?$", REG_EXTENDED);
 	if (err)
 		goto out_free_arm;
 	/* b, b.cond, br, cbz/cbnz, tbz/tbnz */
-	err = regcomp(&arm->jump_insn, "^[ct]?br?\\.?(cc|cs|eq|ge|gt|hi|le|ls|lt|mi|ne|pl)?n?z?$",
+	err = regcomp(&arm->jump_insn, "^[ct]?br?\\.?(cc|cs|eq|ge|gt|hi|hs|le|lo|ls|lt|mi|ne|pl|vc|vs)?n?z?$",
 		      REG_EXTENDED);
 	if (err)
 		goto out_free_call;
@@ -117,5 +119,5 @@ out_free_call:
 	regfree(&arm->call_insn);
 out_free_arm:
 	free(arm);
-	return -1;
+	return SYMBOL_ANNOTATE_ERRNO__ARCH_INIT_REGEXP;
 }

@@ -1,15 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * wm831x-i2c.c  --  I2C access for Wolfson WM831x PMICs
  *
  * Copyright 2009,2010 Wolfson Microelectronics PLC.
  *
  * Author: Mark Brown <broonie@opensource.wolfsonmicro.com>
- *
- *  This program is free software; you can redistribute  it and/or modify it
- *  under  the terms of  the GNU General  Public License as published by the
- *  Free Software Foundation;  either version 2 of the  License, or (at your
- *  option) any later version.
- *
  */
 
 #include <linux/kernel.h>
@@ -20,30 +15,22 @@
 #include <linux/slab.h>
 #include <linux/err.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/regmap.h>
 
 #include <linux/mfd/wm831x/core.h>
 #include <linux/mfd/wm831x/pdata.h>
 
-static int wm831x_i2c_probe(struct i2c_client *i2c,
-			    const struct i2c_device_id *id)
+static int wm831x_i2c_probe(struct i2c_client *i2c)
 {
 	struct wm831x_pdata *pdata = dev_get_platdata(&i2c->dev);
-	const struct of_device_id *of_id;
 	struct wm831x *wm831x;
 	enum wm831x_parent type;
 	int ret;
 
-	if (i2c->dev.of_node) {
-		of_id = of_match_device(wm831x_of_match, &i2c->dev);
-		if (!of_id) {
-			dev_err(&i2c->dev, "Failed to match device\n");
-			return -ENODEV;
-		}
-		type = (enum wm831x_parent)of_id->data;
-	} else {
-		type = (enum wm831x_parent)id->driver_data;
+	type = (uintptr_t)i2c_get_match_data(i2c);
+	if (!type) {
+		dev_err(&i2c->dev, "Failed to match device\n");
+		return -ENODEV;
 	}
 
 	wm831x = devm_kzalloc(&i2c->dev, sizeof(struct wm831x), GFP_KERNEL);

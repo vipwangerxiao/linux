@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012-2014 Intel Corporation
  *
@@ -9,11 +10,6 @@
  * Maintained by: <tpmdd-devel@lists.sourceforge.net>
  *
  * This file contains implementation of the sysfs interface for PPI.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; version 2
- * of the License.
  */
 
 
@@ -362,7 +358,7 @@ static struct attribute *ppi_attrs[] = {
 	&dev_attr_tcg_operations.attr,
 	&dev_attr_vs_operations.attr, NULL,
 };
-static struct attribute_group ppi_attr_grp = {
+static const struct attribute_group ppi_attr_grp = {
 	.name = "ppi",
 	.attrs = ppi_attrs
 };
@@ -384,7 +380,7 @@ void tpm_add_ppi(struct tpm_chip *chip)
 				      TPM_PPI_FN_VERSION,
 				      NULL, ACPI_TYPE_STRING);
 	if (obj) {
-		strlcpy(chip->ppi_version, obj->string.pointer,
+		strscpy(chip->ppi_version, obj->string.pointer,
 			sizeof(chip->ppi_version));
 		ACPI_FREE(obj);
 	}

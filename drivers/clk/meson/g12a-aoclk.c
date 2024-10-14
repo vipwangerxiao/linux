@@ -12,13 +12,14 @@
 #include <linux/platform_device.h>
 #include <linux/reset-controller.h>
 #include <linux/mfd/syscon.h>
+#include <linux/module.h>
 #include "meson-aoclk.h"
-#include "g12a-aoclk.h"
 
 #include "clk-regmap.h"
 #include "clk-dualdiv.h"
 
-#define IN_PREFIX "ao-in-"
+#include <dt-bindings/clock/g12a-aoclkc.h>
+#include <dt-bindings/reset/g12a-aoclkc.h>
 
 /*
  * AO Configuration Clock registers offsets
@@ -51,7 +52,9 @@ static struct clk_regmap g12a_aoclk_##_name = {				\
 	.hw.init = &(struct clk_init_data) {				\
 		.name =  "g12a_ao_" #_name,				\
 		.ops = &clk_regmap_gate_ops,				\
-		.parent_names = (const char *[]){ IN_PREFIX "mpeg-clk" }, \
+		.parent_data = &(const struct clk_parent_data) {	\
+			.fw_name = "mpeg-clk",				\
+		},							\
 		.num_parents = 1,					\
 		.flags = CLK_IGNORE_UNUSED,				\
 	},								\
@@ -81,7 +84,9 @@ static struct clk_regmap g12a_aoclk_cts_oscin = {
 	.hw.init = &(struct clk_init_data){
 		.name = "cts_oscin",
 		.ops = &clk_regmap_gate_ro_ops,
-		.parent_names = (const char *[]){ IN_PREFIX "xtal" },
+		.parent_data = &(const struct clk_parent_data) {
+			.fw_name = "xtal",
+		},
 		.num_parents = 1,
 	},
 };
@@ -106,7 +111,9 @@ static struct clk_regmap g12a_aoclk_32k_by_oscin_pre = {
 	.hw.init = &(struct clk_init_data){
 		.name = "g12a_ao_32k_by_oscin_pre",
 		.ops = &clk_regmap_gate_ops,
-		.parent_names = (const char *[]){ "cts_oscin" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&g12a_aoclk_cts_oscin.hw
+		},
 		.num_parents = 1,
 	},
 };
@@ -143,7 +150,9 @@ static struct clk_regmap g12a_aoclk_32k_by_oscin_div = {
 	.hw.init = &(struct clk_init_data){
 		.name = "g12a_ao_32k_by_oscin_div",
 		.ops = &meson_clk_dualdiv_ops,
-		.parent_names = (const char *[]){ "g12a_ao_32k_by_oscin_pre" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&g12a_aoclk_32k_by_oscin_pre.hw
+		},
 		.num_parents = 1,
 	},
 };
@@ -158,8 +167,10 @@ static struct clk_regmap g12a_aoclk_32k_by_oscin_sel = {
 	.hw.init = &(struct clk_init_data){
 		.name = "g12a_ao_32k_by_oscin_sel",
 		.ops = &clk_regmap_mux_ops,
-		.parent_names = (const char *[]){ "g12a_ao_32k_by_oscin_div",
-						  "g12a_ao_32k_by_oscin_pre" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&g12a_aoclk_32k_by_oscin_div.hw,
+			&g12a_aoclk_32k_by_oscin_pre.hw,
+		},
 		.num_parents = 2,
 		.flags = CLK_SET_RATE_PARENT,
 	},
@@ -173,7 +184,9 @@ static struct clk_regmap g12a_aoclk_32k_by_oscin = {
 	.hw.init = &(struct clk_init_data){
 		.name = "g12a_ao_32k_by_oscin",
 		.ops = &clk_regmap_gate_ops,
-		.parent_names = (const char *[]){ "g12a_ao_32k_by_oscin_sel" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&g12a_aoclk_32k_by_oscin_sel.hw
+		},
 		.num_parents = 1,
 		.flags = CLK_SET_RATE_PARENT,
 	},
@@ -189,7 +202,9 @@ static struct clk_regmap g12a_aoclk_cec_pre = {
 	.hw.init = &(struct clk_init_data){
 		.name = "g12a_ao_cec_pre",
 		.ops = &clk_regmap_gate_ops,
-		.parent_names = (const char *[]){ "cts_oscin" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&g12a_aoclk_cts_oscin.hw
+		},
 		.num_parents = 1,
 	},
 };
@@ -226,7 +241,9 @@ static struct clk_regmap g12a_aoclk_cec_div = {
 	.hw.init = &(struct clk_init_data){
 		.name = "g12a_ao_cec_div",
 		.ops = &meson_clk_dualdiv_ops,
-		.parent_names = (const char *[]){ "g12a_ao_cec_pre" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&g12a_aoclk_cec_pre.hw
+		},
 		.num_parents = 1,
 	},
 };
@@ -241,8 +258,10 @@ static struct clk_regmap g12a_aoclk_cec_sel = {
 	.hw.init = &(struct clk_init_data){
 		.name = "g12a_ao_cec_sel",
 		.ops = &clk_regmap_mux_ops,
-		.parent_names = (const char *[]){ "g12a_ao_cec_div",
-						  "g12a_ao_cec_pre" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&g12a_aoclk_cec_div.hw,
+			&g12a_aoclk_cec_pre.hw,
+		},
 		.num_parents = 2,
 		.flags = CLK_SET_RATE_PARENT,
 	},
@@ -256,7 +275,9 @@ static struct clk_regmap g12a_aoclk_cec = {
 	.hw.init = &(struct clk_init_data){
 		.name = "g12a_ao_cec",
 		.ops = &clk_regmap_gate_ops,
-		.parent_names = (const char *[]){ "g12a_ao_cec_sel" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&g12a_aoclk_cec_sel.hw
+		},
 		.num_parents = 1,
 		.flags = CLK_SET_RATE_PARENT,
 	},
@@ -272,8 +293,10 @@ static struct clk_regmap g12a_aoclk_cts_rtc_oscin = {
 	.hw.init = &(struct clk_init_data){
 		.name = "g12a_ao_cts_rtc_oscin",
 		.ops = &clk_regmap_mux_ops,
-		.parent_names = (const char *[]){ "g12a_ao_32k_by_oscin",
-						  IN_PREFIX "ext_32k-0" },
+		.parent_data = (const struct clk_parent_data []) {
+			{ .hw = &g12a_aoclk_32k_by_oscin.hw },
+			{ .fw_name = "ext-32k-0", },
+		},
 		.num_parents = 2,
 		.flags = CLK_SET_RATE_PARENT,
 	},
@@ -289,8 +312,10 @@ static struct clk_regmap g12a_aoclk_clk81 = {
 	.hw.init = &(struct clk_init_data){
 		.name = "g12a_ao_clk81",
 		.ops = &clk_regmap_mux_ro_ops,
-		.parent_names = (const char *[]){ IN_PREFIX "mpeg-clk",
-						  "g12a_ao_cts_rtc_oscin"},
+		.parent_data = (const struct clk_parent_data []) {
+			{ .fw_name = "mpeg-clk", },
+			{ .hw = &g12a_aoclk_cts_rtc_oscin.hw },
+		},
 		.num_parents = 2,
 		.flags = CLK_SET_RATE_PARENT,
 	},
@@ -305,8 +330,10 @@ static struct clk_regmap g12a_aoclk_saradc_mux = {
 	.hw.init = &(struct clk_init_data){
 		.name = "g12a_ao_saradc_mux",
 		.ops = &clk_regmap_mux_ops,
-		.parent_names = (const char *[]){ IN_PREFIX "xtal",
-						  "g12a_ao_clk81" },
+		.parent_data = (const struct clk_parent_data []) {
+			{ .fw_name = "xtal", },
+			{ .hw = &g12a_aoclk_clk81.hw },
+		},
 		.num_parents = 2,
 	},
 };
@@ -320,7 +347,9 @@ static struct clk_regmap g12a_aoclk_saradc_div = {
 	.hw.init = &(struct clk_init_data){
 		.name = "g12a_ao_saradc_div",
 		.ops = &clk_regmap_divider_ops,
-		.parent_names = (const char *[]){ "g12a_ao_saradc_mux" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&g12a_aoclk_saradc_mux.hw
+		},
 		.num_parents = 1,
 		.flags = CLK_SET_RATE_PARENT,
 	},
@@ -334,7 +363,9 @@ static struct clk_regmap g12a_aoclk_saradc_gate = {
 	.hw.init = &(struct clk_init_data){
 		.name = "g12a_ao_saradc_gate",
 		.ops = &clk_regmap_gate_ops,
-		.parent_names = (const char *[]){ "g12a_ao_saradc_div" },
+		.parent_hws = (const struct clk_hw *[]) {
+			&g12a_aoclk_saradc_div.hw
+		},
 		.num_parents = 1,
 		.flags = CLK_SET_RATE_PARENT,
 	},
@@ -382,45 +413,36 @@ static struct clk_regmap *g12a_aoclk_regmap[] = {
 	&g12a_aoclk_saradc_gate,
 };
 
-static const struct clk_hw_onecell_data g12a_aoclk_onecell_data = {
-	.hws = {
-		[CLKID_AO_AHB]		= &g12a_aoclk_ahb.hw,
-		[CLKID_AO_IR_IN]	= &g12a_aoclk_ir_in.hw,
-		[CLKID_AO_I2C_M0]	= &g12a_aoclk_i2c_m0.hw,
-		[CLKID_AO_I2C_S0]	= &g12a_aoclk_i2c_s0.hw,
-		[CLKID_AO_UART]		= &g12a_aoclk_uart.hw,
-		[CLKID_AO_PROD_I2C]	= &g12a_aoclk_prod_i2c.hw,
-		[CLKID_AO_UART2]	= &g12a_aoclk_uart2.hw,
-		[CLKID_AO_IR_OUT]	= &g12a_aoclk_ir_out.hw,
-		[CLKID_AO_SAR_ADC]	= &g12a_aoclk_saradc.hw,
-		[CLKID_AO_MAILBOX]	= &g12a_aoclk_mailbox.hw,
-		[CLKID_AO_M3]		= &g12a_aoclk_m3.hw,
-		[CLKID_AO_AHB_SRAM]	= &g12a_aoclk_ahb_sram.hw,
-		[CLKID_AO_RTI]		= &g12a_aoclk_rti.hw,
-		[CLKID_AO_M4_FCLK]	= &g12a_aoclk_m4_fclk.hw,
-		[CLKID_AO_M4_HCLK]	= &g12a_aoclk_m4_hclk.hw,
-		[CLKID_AO_CLK81]	= &g12a_aoclk_clk81.hw,
-		[CLKID_AO_SAR_ADC_SEL]	= &g12a_aoclk_saradc_mux.hw,
-		[CLKID_AO_SAR_ADC_DIV]	= &g12a_aoclk_saradc_div.hw,
-		[CLKID_AO_SAR_ADC_CLK]	= &g12a_aoclk_saradc_gate.hw,
-		[CLKID_AO_CTS_OSCIN]	= &g12a_aoclk_cts_oscin.hw,
-		[CLKID_AO_32K_PRE]	= &g12a_aoclk_32k_by_oscin_pre.hw,
-		[CLKID_AO_32K_DIV]	= &g12a_aoclk_32k_by_oscin_div.hw,
-		[CLKID_AO_32K_SEL]	= &g12a_aoclk_32k_by_oscin_sel.hw,
-		[CLKID_AO_32K]		= &g12a_aoclk_32k_by_oscin.hw,
-		[CLKID_AO_CEC_PRE]	= &g12a_aoclk_cec_pre.hw,
-		[CLKID_AO_CEC_DIV]	= &g12a_aoclk_cec_div.hw,
-		[CLKID_AO_CEC_SEL]	= &g12a_aoclk_cec_sel.hw,
-		[CLKID_AO_CEC]		= &g12a_aoclk_cec.hw,
-		[CLKID_AO_CTS_RTC_OSCIN] = &g12a_aoclk_cts_rtc_oscin.hw,
-	},
-	.num = NR_CLKS,
-};
-
-static const struct meson_aoclk_input g12a_aoclk_inputs[] = {
-	{ .name = "xtal",	.required = true  },
-	{ .name = "mpeg-clk",	.required = true  },
-	{ .name = "ext-32k-0",	.required = false },
+static struct clk_hw *g12a_aoclk_hw_clks[] = {
+	[CLKID_AO_AHB]		= &g12a_aoclk_ahb.hw,
+	[CLKID_AO_IR_IN]	= &g12a_aoclk_ir_in.hw,
+	[CLKID_AO_I2C_M0]	= &g12a_aoclk_i2c_m0.hw,
+	[CLKID_AO_I2C_S0]	= &g12a_aoclk_i2c_s0.hw,
+	[CLKID_AO_UART]		= &g12a_aoclk_uart.hw,
+	[CLKID_AO_PROD_I2C]	= &g12a_aoclk_prod_i2c.hw,
+	[CLKID_AO_UART2]	= &g12a_aoclk_uart2.hw,
+	[CLKID_AO_IR_OUT]	= &g12a_aoclk_ir_out.hw,
+	[CLKID_AO_SAR_ADC]	= &g12a_aoclk_saradc.hw,
+	[CLKID_AO_MAILBOX]	= &g12a_aoclk_mailbox.hw,
+	[CLKID_AO_M3]		= &g12a_aoclk_m3.hw,
+	[CLKID_AO_AHB_SRAM]	= &g12a_aoclk_ahb_sram.hw,
+	[CLKID_AO_RTI]		= &g12a_aoclk_rti.hw,
+	[CLKID_AO_M4_FCLK]	= &g12a_aoclk_m4_fclk.hw,
+	[CLKID_AO_M4_HCLK]	= &g12a_aoclk_m4_hclk.hw,
+	[CLKID_AO_CLK81]	= &g12a_aoclk_clk81.hw,
+	[CLKID_AO_SAR_ADC_SEL]	= &g12a_aoclk_saradc_mux.hw,
+	[CLKID_AO_SAR_ADC_DIV]	= &g12a_aoclk_saradc_div.hw,
+	[CLKID_AO_SAR_ADC_CLK]	= &g12a_aoclk_saradc_gate.hw,
+	[CLKID_AO_CTS_OSCIN]	= &g12a_aoclk_cts_oscin.hw,
+	[CLKID_AO_32K_PRE]	= &g12a_aoclk_32k_by_oscin_pre.hw,
+	[CLKID_AO_32K_DIV]	= &g12a_aoclk_32k_by_oscin_div.hw,
+	[CLKID_AO_32K_SEL]	= &g12a_aoclk_32k_by_oscin_sel.hw,
+	[CLKID_AO_32K]		= &g12a_aoclk_32k_by_oscin.hw,
+	[CLKID_AO_CEC_PRE]	= &g12a_aoclk_cec_pre.hw,
+	[CLKID_AO_CEC_DIV]	= &g12a_aoclk_cec_div.hw,
+	[CLKID_AO_CEC_SEL]	= &g12a_aoclk_cec_sel.hw,
+	[CLKID_AO_CEC]		= &g12a_aoclk_cec.hw,
+	[CLKID_AO_CTS_RTC_OSCIN] = &g12a_aoclk_cts_rtc_oscin.hw,
 };
 
 static const struct meson_aoclk_data g12a_aoclkc_data = {
@@ -429,10 +451,10 @@ static const struct meson_aoclk_data g12a_aoclkc_data = {
 	.reset		= g12a_aoclk_reset,
 	.num_clks	= ARRAY_SIZE(g12a_aoclk_regmap),
 	.clks		= g12a_aoclk_regmap,
-	.hw_data	= &g12a_aoclk_onecell_data,
-	.inputs		= g12a_aoclk_inputs,
-	.num_inputs	= ARRAY_SIZE(g12a_aoclk_inputs),
-	.input_prefix	= IN_PREFIX,
+	.hw_clks	= {
+		.hws	= g12a_aoclk_hw_clks,
+		.num	= ARRAY_SIZE(g12a_aoclk_hw_clks),
+	},
 };
 
 static const struct of_device_id g12a_aoclkc_match_table[] = {
@@ -442,6 +464,7 @@ static const struct of_device_id g12a_aoclkc_match_table[] = {
 	},
 	{ }
 };
+MODULE_DEVICE_TABLE(of, g12a_aoclkc_match_table);
 
 static struct platform_driver g12a_aoclkc_driver = {
 	.probe		= meson_aoclkc_probe,
@@ -450,5 +473,8 @@ static struct platform_driver g12a_aoclkc_driver = {
 		.of_match_table = g12a_aoclkc_match_table,
 	},
 };
+module_platform_driver(g12a_aoclkc_driver);
 
-builtin_platform_driver(g12a_aoclkc_driver);
+MODULE_DESCRIPTION("Amlogic G12A Always-ON Clock Controller driver");
+MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS(CLK_MESON);

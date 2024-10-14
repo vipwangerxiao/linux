@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
 	Copyright (C) 2004 - 2010 Ivo van Doorn <IvDoorn@gmail.com>
 	Copyright (C) 2010 Willow Garage <http://www.willowgarage.com>
@@ -10,18 +11,6 @@
 	Copyright (C) 2009 Bart Zolnierkiewicz <bzolnier@gmail.com>
 	<http://rt2x00.serialmonkey.com>
 
-	This program is free software; you can redistribute it and/or modify
-	it under the terms of the GNU General Public License as published by
-	the Free Software Foundation; either version 2 of the License, or
-	(at your option) any later version.
-
-	This program is distributed in the hope that it will be useful,
-	but WITHOUT ANY WARRANTY; without even the implied warranty of
-	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-	GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 /*
@@ -882,6 +871,18 @@
 #define LED_CFG_LED_POLAR		FIELD32(0x40000000)
 
 /*
+ * AMPDU_MAX_LEN_20M1S: Per MCS max A-MPDU length, 20 MHz, MCS 0-7
+ * AMPDU_MAX_LEN_20M2S: Per MCS max A-MPDU length, 20 MHz, MCS 8-15
+ * AMPDU_MAX_LEN_40M1S: Per MCS max A-MPDU length, 40 MHz, MCS 0-7
+ * AMPDU_MAX_LEN_40M2S: Per MCS max A-MPDU length, 40 MHz, MCS 8-15
+ * Maximum A-MPDU length = 2^(AMPDU_MAX - 5) kilobytes
+ */
+#define AMPDU_MAX_LEN_20M1S		0x1030
+#define AMPDU_MAX_LEN_20M2S		0x1034
+#define AMPDU_MAX_LEN_40M1S		0x1038
+#define AMPDU_MAX_LEN_40M2S		0x103C
+
+/*
  * AMPDU_BA_WINSIZE: Force BlockAck window size
  * FORCE_WINSIZE_ENABLE:
  *   0: Disable forcing of BlockAck window size
@@ -1027,6 +1028,8 @@
  */
 #define MAC_STATUS_CFG			0x1200
 #define MAC_STATUS_CFG_BBP_RF_BUSY	FIELD32(0x00000003)
+#define MAC_STATUS_CFG_BBP_RF_BUSY_TX	FIELD32(0x00000001)
+#define MAC_STATUS_CFG_BBP_RF_BUSY_RX	FIELD32(0x00000002)
 
 /*
  * PWR_PIN_CFG:
@@ -1553,6 +1556,12 @@
  * EXP_ACK_TIME:
  */
 #define EXP_ACK_TIME			0x1380
+
+/*
+ * HT_FBK_TO_LEGACY: Enable/Disable HT/RTS fallback to OFDM/CCK rate
+ * Not available for legacy SoCs
+ */
+#define HT_FBK_TO_LEGACY		0x1384
 
 /* TX_PWR_CFG_5 */
 #define TX_PWR_CFG_5			0x1384
@@ -2750,6 +2759,7 @@ enum rt2800_eeprom_word {
 #define EEPROM_NIC_CONF2_RX_STREAM	FIELD16(0x000f)
 #define EEPROM_NIC_CONF2_TX_STREAM	FIELD16(0x00f0)
 #define EEPROM_NIC_CONF2_CRYSTAL	FIELD16(0x0600)
+#define EEPROM_NIC_CONF2_EXTERNAL_PA	FIELD16(0x8000)
 
 /*
  * EEPROM LNA
@@ -3183,5 +3193,9 @@ enum rt2800_eeprom_word {
  * the hw beacon timer.
  */
 #define BCN_TBTT_OFFSET 64
+
+/* Watchdog type mask */
+#define RT2800_WATCHDOG_HANG		BIT(0)
+#define RT2800_WATCHDOG_DMA_BUSY	BIT(1)
 
 #endif /* RT2800_H */

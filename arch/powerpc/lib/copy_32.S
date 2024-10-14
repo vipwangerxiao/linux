@@ -1,18 +1,14 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Memory copy functions for 32-bit PowerPC.
  *
  * Copyright (C) 1996-2005 Paul Mackerras.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
+#include <linux/export.h>
 #include <asm/processor.h>
 #include <asm/cache.h>
 #include <asm/errno.h>
 #include <asm/ppc_asm.h>
-#include <asm/export.h>
 #include <asm/code-patching-asm.h>
 #include <asm/kasan.h>
 
@@ -61,9 +57,6 @@
 	EX_TABLE(8 ## n ## 7b,9 ## n ## 1b)
 
 	.text
-	.stabs	"arch/powerpc/lib/",N_SO,0,0,0f
-	.stabs	"copy_32.S",N_SO,0,0,0f
-0:
 
 CACHELINE_BYTES = L1_CACHE_BYTES
 LG_CACHELINE_BYTES = L1_CACHE_SHIFT

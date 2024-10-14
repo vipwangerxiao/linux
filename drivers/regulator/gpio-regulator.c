@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * gpio-regulator.c
  *
@@ -11,11 +12,6 @@
  *
  * Copyright (c) 2009 Nokia Corporation
  * Roger Quadros <ext-roger.quadros@nokia.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of the
- * License, or (at your option) any later version.
  *
  * This is useful for systems with mixed controllable and
  * non-controllable regulators, as well as for allowing testing on
@@ -152,6 +148,13 @@ of_get_gpio_regulator_config(struct device *dev, struct device_node *np,
 
 	config->supply_name = config->init_data->constraints.name;
 
+	if (config->init_data->constraints.boot_on)
+		config->enabled_at_boot = true;
+
+	/*
+	 * Do not use: undocumented device tree property.
+	 * This is kept around solely for device tree ABI stability.
+	 */
 	if (of_property_read_bool(np, "enable-at-boot"))
 		config->enabled_at_boot = true;
 
@@ -217,6 +220,9 @@ of_get_gpio_regulator_config(struct device *dev, struct device_node *np,
 				 regtype);
 	}
 
+	if (of_property_present(np, "vin-supply"))
+		config->input_supply = "vin";
+
 	return config;
 }
 
@@ -256,6 +262,18 @@ static int gpio_regulator_probe(struct platform_device *pdev)
 
 	drvdata->gpiods = devm_kzalloc(dev, sizeof(struct gpio_desc *),
 				       GFP_KERNEL);
+
+	if (config->input_supply) {
+		drvdata->desc.supply_name = devm_kstrdup(&pdev->dev,
+							 config->input_supply,
+							 GFP_KERNEL);
+		if (!drvdata->desc.supply_name) {
+			dev_err(&pdev->dev,
+				"Failed to allocate input supply\n");
+			return -ENOMEM;
+		}
+	}
+
 	if (!drvdata->gpiods)
 		return -ENOMEM;
 	for (i = 0; i < config->ngpios; i++) {
@@ -315,7 +333,7 @@ static int gpio_regulator_probe(struct platform_device *pdev)
 
 	/*
 	 * The signal will be inverted by the GPIO core if flagged so in the
-	 * decriptor.
+	 * descriptor.
 	 */
 	if (config->enabled_at_boot)
 		gflags = GPIOD_OUT_HIGH | GPIOD_FLAGS_BIT_NONEXCLUSIVE;
@@ -350,6 +368,7 @@ static struct platform_driver gpio_regulator_driver = {
 	.probe		= gpio_regulator_probe,
 	.driver		= {
 		.name		= "gpio-regulator",
+		.probe_type	= PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table = of_match_ptr(regulator_gpio_of_match),
 	},
 };

@@ -1,21 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *   Copyright (C) International Business Machines  Corp., 2002-2004
  *   Copyright (C) Andreas Gruenbacher, 2001
  *   Copyright (C) Linus Torvalds, 1991, 1992
- *
- *   This program is free software;  you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or
- *   (at your option) any later version.
- *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY;  without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See
- *   the GNU General Public License for more details.
- *
- *   You should have received a copy of the GNU General Public License
- *   along with this program;  if not, write to the Free Software
- *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #include <linux/sched.h>
@@ -27,12 +14,15 @@
 #include "jfs_xattr.h"
 #include "jfs_acl.h"
 
-struct posix_acl *jfs_get_acl(struct inode *inode, int type)
+struct posix_acl *jfs_get_acl(struct inode *inode, int type, bool rcu)
 {
 	struct posix_acl *acl;
 	char *ea_name;
 	int size;
 	char *value = NULL;
+
+	if (rcu)
+		return ERR_PTR(-ECHILD);
 
 	switch(type) {
 		case ACL_TYPE_ACCESS:
@@ -104,17 +94,19 @@ out:
 	return rc;
 }
 
-int jfs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
+int jfs_set_acl(struct mnt_idmap *idmap, struct dentry *dentry,
+		struct posix_acl *acl, int type)
 {
 	int rc;
 	tid_t tid;
 	int update_mode = 0;
+	struct inode *inode = d_inode(dentry);
 	umode_t mode = inode->i_mode;
 
 	tid = txBegin(inode->i_sb, 0);
 	mutex_lock(&JFS_IP(inode)->commit_mutex);
 	if (type == ACL_TYPE_ACCESS && acl) {
-		rc = posix_acl_update_mode(inode, &mode, &acl);
+		rc = posix_acl_update_mode(&nop_mnt_idmap, inode, &mode, &acl);
 		if (rc)
 			goto end_tx;
 		if (mode != inode->i_mode)
@@ -124,7 +116,7 @@ int jfs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 	if (!rc) {
 		if (update_mode) {
 			inode->i_mode = mode;
-			inode->i_ctime = current_time(inode);
+			inode_set_ctime_current(inode);
 			mark_inode_dirty(inode);
 		}
 		rc = txCommit(tid, 1, &inode, 0);

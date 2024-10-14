@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2006-2007 PA Semi, Inc
  *
@@ -5,19 +6,6 @@
  * Maintained by: Olof Johansson <olof@lixom.net>
  *
  * Driver for the PWRficient onchip NAND flash interface
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 
 #undef DEBUG
@@ -26,7 +14,6 @@
 #include <linux/module.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/rawnand.h>
-#include <linux/mtd/nand_ecc.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
@@ -39,8 +26,12 @@
 #define CLE_PIN_CTL			15
 #define ALE_PIN_CTL			14
 
-static unsigned int lpcctl;
-static struct mtd_info *pasemi_nand_mtd;
+struct pasemi_ddata {
+	struct nand_chip chip;
+	unsigned int lpcctl;
+	struct nand_controller controller;
+};
+
 static const char driver_name[] = "pasemi-nand";
 
 static void pasemi_read_buf(struct nand_chip *chip, u_char *buf, int len)
@@ -67,6 +58,8 @@ static void pasemi_write_buf(struct nand_chip *chip, const u_char *buf,
 static void pasemi_hwcontrol(struct nand_chip *chip, int cmd,
 			     unsigned int ctrl)
 {
+	struct pasemi_ddata *ddata = container_of(chip, struct pasemi_ddata, chip);
+
 	if (cmd == NAND_CMD_NONE)
 		return;
 
@@ -77,13 +70,28 @@ static void pasemi_hwcontrol(struct nand_chip *chip, int cmd,
 
 	/* Push out posted writes */
 	eieio();
-	inl(lpcctl);
+	inl(ddata->lpcctl);
 }
 
-int pasemi_device_ready(struct nand_chip *chip)
+static int pasemi_device_ready(struct nand_chip *chip)
 {
-	return !!(inl(lpcctl) & LBICTRL_LPCCTL_NR);
+	struct pasemi_ddata *ddata = container_of(chip, struct pasemi_ddata, chip);
+
+	return !!(inl(ddata->lpcctl) & LBICTRL_LPCCTL_NR);
 }
+
+static int pasemi_attach_chip(struct nand_chip *chip)
+{
+	if (chip->ecc.engine_type == NAND_ECC_ENGINE_TYPE_SOFT &&
+	    chip->ecc.algo == NAND_ECC_ALGO_UNKNOWN)
+		chip->ecc.algo = NAND_ECC_ALGO_HAMMING;
+
+	return 0;
+}
+
+static const struct nand_controller_ops pasemi_ops = {
+	.attach_chip = pasemi_attach_chip,
+};
 
 static int pasemi_nand_probe(struct platform_device *ofdev)
 {
@@ -92,25 +100,31 @@ static int pasemi_nand_probe(struct platform_device *ofdev)
 	struct device_node *np = dev->of_node;
 	struct resource res;
 	struct nand_chip *chip;
+	struct nand_controller *controller;
 	int err = 0;
+	struct pasemi_ddata *ddata;
+	struct mtd_info *pasemi_nand_mtd;
 
 	err = of_address_to_resource(np, 0, &res);
 
 	if (err)
 		return -EINVAL;
 
-	/* We only support one device at the moment */
-	if (pasemi_nand_mtd)
-		return -ENODEV;
-
 	dev_dbg(dev, "pasemi_nand at %pR\n", &res);
 
 	/* Allocate memory for MTD device structure and private data */
-	chip = kzalloc(sizeof(struct nand_chip), GFP_KERNEL);
-	if (!chip) {
+	ddata = kzalloc(sizeof(*ddata), GFP_KERNEL);
+	if (!ddata) {
 		err = -ENOMEM;
 		goto out;
 	}
+	platform_set_drvdata(ofdev, ddata);
+	chip = &ddata->chip;
+	controller = &ddata->controller;
+
+	controller->ops = &pasemi_ops;
+	nand_controller_init(controller);
+	chip->controller = controller;
 
 	pasemi_nand_mtd = nand_to_mtd(chip);
 
@@ -131,10 +145,10 @@ static int pasemi_nand_probe(struct platform_device *ofdev)
 		goto out_ior;
 	}
 
-	lpcctl = pci_resource_start(pdev, 0);
+	ddata->lpcctl = pci_resource_start(pdev, 0);
 	pci_dev_put(pdev);
 
-	if (!request_region(lpcctl, 4, driver_name)) {
+	if (!request_region(ddata->lpcctl, 4, driver_name)) {
 		err = -EBUSY;
 		goto out_ior;
 	}
@@ -144,11 +158,16 @@ static int pasemi_nand_probe(struct platform_device *ofdev)
 	chip->legacy.read_buf = pasemi_read_buf;
 	chip->legacy.write_buf = pasemi_write_buf;
 	chip->legacy.chip_delay = 0;
-	chip->ecc.mode = NAND_ECC_SOFT;
-	chip->ecc.algo = NAND_ECC_HAMMING;
 
 	/* Enable the following for a flash based bad block table */
 	chip->bbt_options = NAND_BBT_USE_FLASH;
+
+	/*
+	 * This driver assumes that the default ECC engine should be TYPE_SOFT.
+	 * Set ->engine_type before registering the NAND devices in order to
+	 * provide a driver specific default value.
+	 */
+	chip->ecc.engine_type = NAND_ECC_ENGINE_TYPE_SOFT;
 
 	/* Scan to find existence of the device */
 	err = nand_scan(chip, 1);
@@ -158,46 +177,47 @@ static int pasemi_nand_probe(struct platform_device *ofdev)
 	if (mtd_device_register(pasemi_nand_mtd, NULL, 0)) {
 		dev_err(dev, "Unable to register MTD device\n");
 		err = -ENODEV;
-		goto out_lpc;
+		goto out_cleanup_nand;
 	}
 
 	dev_info(dev, "PA Semi NAND flash at %pR, control at I/O %x\n", &res,
-		 lpcctl);
+		 ddata->lpcctl);
 
 	return 0;
 
+ out_cleanup_nand:
+	nand_cleanup(chip);
  out_lpc:
-	release_region(lpcctl, 4);
+	release_region(ddata->lpcctl, 4);
  out_ior:
 	iounmap(chip->legacy.IO_ADDR_R);
  out_mtd:
-	kfree(chip);
+	kfree(ddata);
  out:
 	return err;
 }
 
-static int pasemi_nand_remove(struct platform_device *ofdev)
+static void pasemi_nand_remove(struct platform_device *ofdev)
 {
+	struct pasemi_ddata *ddata = platform_get_drvdata(ofdev);
+	struct mtd_info *pasemi_nand_mtd;
+	int ret;
 	struct nand_chip *chip;
 
-	if (!pasemi_nand_mtd)
-		return 0;
-
-	chip = mtd_to_nand(pasemi_nand_mtd);
+	chip = &ddata->chip;
+	pasemi_nand_mtd = nand_to_mtd(chip);
 
 	/* Release resources, unregister device */
-	nand_release(chip);
+	ret = mtd_device_unregister(pasemi_nand_mtd);
+	WARN_ON(ret);
+	nand_cleanup(chip);
 
-	release_region(lpcctl, 4);
+	release_region(ddata->lpcctl, 4);
 
 	iounmap(chip->legacy.IO_ADDR_R);
 
 	/* Free the MTD device structure */
-	kfree(chip);
-
-	pasemi_nand_mtd = NULL;
-
-	return 0;
+	kfree(ddata);
 }
 
 static const struct of_device_id pasemi_nand_match[] =
@@ -217,7 +237,7 @@ static struct platform_driver pasemi_nand_driver =
 		.of_match_table = pasemi_nand_match,
 	},
 	.probe		= pasemi_nand_probe,
-	.remove		= pasemi_nand_remove,
+	.remove_new	= pasemi_nand_remove,
 };
 
 module_platform_driver(pasemi_nand_driver);

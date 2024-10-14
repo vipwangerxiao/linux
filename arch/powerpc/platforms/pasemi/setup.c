@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2006-2007 PA Semi, Inc
  *
@@ -7,19 +8,6 @@
  * Maintained by: Olof Johansson <olof@lixom.net>
  *
  * Based on arch/powerpc/platforms/maple/setup.c
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 
 #include <linux/errno.h>
@@ -28,10 +16,12 @@
 #include <linux/console.h>
 #include <linux/export.h>
 #include <linux/pci.h>
+#include <linux/of.h>
 #include <linux/of_platform.h>
+#include <linux/platform_device.h>
 #include <linux/gfp.h>
+#include <linux/irqdomain.h>
 
-#include <asm/prom.h>
 #include <asm/iommu.h>
 #include <asm/machdep.h>
 #include <asm/i8259.h>
@@ -74,7 +64,7 @@ static void __noreturn pas_restart(char *cmd)
 }
 
 #ifdef CONFIG_PPC_PASEMI_NEMO
-void pas_shutdown(void)
+static void pas_shutdown(void)
 {
 	/* Set the PLD bit that makes the SB600 think the power button is being pressed */
 	void __iomem *pld_map = ioremap(0xf5000000,4096);
@@ -156,12 +146,6 @@ static void __init pas_setup_arch(void)
 	/* Setup SMP callback */
 	smp_ops = &pas_smp_ops;
 #endif
-	/* Lookup PCI hosts */
-	pas_pci_init();
-
-#ifdef CONFIG_DUMMY_CONSOLE
-	conswitchp = &dummy_con;
-#endif
 
 	/* Remap SDC register for doing reset */
 	/* XXXOJN This should maybe come out of the device tree */
@@ -230,7 +214,7 @@ static void sb600_8259_cascade(struct irq_desc *desc)
 	chip->irq_eoi(&desc->irq_data);
 }
 
-static void nemo_init_IRQ(struct mpic *mpic)
+static void __init nemo_init_IRQ(struct mpic *mpic)
 {
 	struct device_node *np;
 	int gpio_virq;
@@ -462,11 +446,11 @@ define_machine(pasemi) {
 	.name			= "PA Semi PWRficient",
 	.probe			= pas_probe,
 	.setup_arch		= pas_setup_arch,
+	.discover_phbs		= pas_pci_init,
 	.init_IRQ		= pas_init_IRQ,
 	.get_irq		= mpic_get_irq,
 	.restart		= pas_restart,
 	.get_boot_time		= pas_get_boot_time,
-	.calibrate_decr		= generic_calibrate_decr,
 	.progress		= pas_progress,
 	.machine_check_exception = pas_machine_check_handler,
 };

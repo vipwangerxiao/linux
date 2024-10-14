@@ -1,23 +1,26 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * EBI driver for Atmel chips
  * inspired by the fsl weim bus driver
  *
  * Copyright (C) 2013 Jean-Jacques Hiblot <jjhiblot@traphandler.com>
- *
- * This file is licensed under the terms of the GNU General Public
- * License version 2. This program is licensed "as is" without any
- * warranty of any kind, whether express or implied.
  */
 
+#include <linux/cleanup.h>
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/mfd/syscon.h>
 #include <linux/mfd/syscon/atmel-matrix.h>
 #include <linux/mfd/syscon/atmel-smc.h>
 #include <linux/init.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
+#include <linux/of_platform.h>
+#include <linux/platform_device.h>
+#include <linux/property.h>
 #include <linux/regmap.h>
 #include <soc/at91/atmel-sfr.h>
+
+#define AT91_EBI_NUM_CS		8
 
 struct atmel_ebi_dev_config {
 	int cs;
@@ -31,7 +34,7 @@ struct atmel_ebi_dev {
 	struct atmel_ebi *ebi;
 	u32 mode;
 	int numcs;
-	struct atmel_ebi_dev_config configs[];
+	struct atmel_ebi_dev_config configs[] __counted_by(numcs);
 };
 
 struct atmel_ebi_caps {
@@ -314,7 +317,7 @@ static int atmel_ebi_dev_setup(struct atmel_ebi *ebi, struct device_node *np,
 		if (ret)
 			return ret;
 
-		if (cs >= AT91_MATRIX_EBI_NUM_CS ||
+		if (cs >= AT91_EBI_NUM_CS ||
 		    !(ebi->caps->available_cs & BIT(cs))) {
 			dev_err(dev, "invalid reg property in %pOF\n", np);
 			return -EINVAL;
@@ -344,7 +347,7 @@ static int atmel_ebi_dev_setup(struct atmel_ebi *ebi, struct device_node *np,
 		apply = true;
 
 	i = 0;
-	for_each_set_bit(cs, &cslines, AT91_MATRIX_EBI_NUM_CS) {
+	for_each_set_bit(cs, &cslines, AT91_EBI_NUM_CS) {
 		ebid->configs[i].cs = cs;
 
 		if (apply) {
@@ -515,16 +518,11 @@ static int atmel_ebi_dev_disable(struct atmel_ebi *ebi, struct device_node *np)
 static int atmel_ebi_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct device_node *child, *np = dev->of_node, *smc_np;
-	const struct of_device_id *match;
+	struct device_node *np = dev->of_node;
 	struct atmel_ebi *ebi;
 	int ret, reg_cells;
 	struct clk *clk;
 	u32 val;
-
-	match = of_match_device(atmel_ebi_id_table, dev);
-	if (!match || !match->data)
-		return -EINVAL;
 
 	ebi = devm_kzalloc(dev, sizeof(*ebi), GFP_KERNEL);
 	if (!ebi)
@@ -533,7 +531,9 @@ static int atmel_ebi_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, ebi);
 
 	INIT_LIST_HEAD(&ebi->devs);
-	ebi->caps = match->data;
+	ebi->caps = device_get_match_data(dev);
+	if (!ebi->caps)
+		return -EINVAL;
 	ebi->dev = dev;
 
 	clk = devm_clk_get(dev, NULL);
@@ -542,7 +542,8 @@ static int atmel_ebi_probe(struct platform_device *pdev)
 
 	ebi->clk = clk;
 
-	smc_np = of_parse_phandle(dev->of_node, "atmel,smc", 0);
+	struct device_node *smc_np __free(device_node) =
+		of_parse_phandle(dev->of_node, "atmel,smc", 0);
 
 	ebi->smc.regmap = syscon_node_to_regmap(smc_np);
 	if (IS_ERR(ebi->smc.regmap))
@@ -591,8 +592,8 @@ static int atmel_ebi_probe(struct platform_device *pdev)
 
 	reg_cells += val;
 
-	for_each_available_child_of_node(np, child) {
-		if (!of_find_property(child, "reg", NULL))
+	for_each_available_child_of_node_scoped(np, child) {
+		if (!of_property_present(child, "reg"))
 			continue;
 
 		ret = atmel_ebi_dev_setup(ebi, child, reg_cells);

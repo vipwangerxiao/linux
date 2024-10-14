@@ -19,6 +19,7 @@
 #include <asm/dsp.h>
 #include <asm/sim.h>
 #include <asm/unistd.h>
+#include <asm/syscalls.h>
 
 #include "signal-common.h"
 
@@ -171,7 +172,7 @@ asmlinkage void sys32_rt_sigreturn(void)
 	if (sig < 0)
 		goto badframe;
 	else if (sig)
-		force_sig(sig, current);
+		force_sig(sig);
 
 	if (compat_restore_altstack(&frame->rs_uc.uc_stack))
 		goto badframe;
@@ -187,7 +188,7 @@ asmlinkage void sys32_rt_sigreturn(void)
 	/* Unreached */
 
 badframe:
-	force_sig(SIGSEGV, current);
+	force_sig(SIGSEGV);
 }
 
 static int setup_rt_frame_32(void *sig_return, struct ksignal *ksig,
@@ -273,7 +274,7 @@ asmlinkage void sys32_sigreturn(void)
 	if (sig < 0)
 		goto badframe;
 	else if (sig)
-		force_sig(sig, current);
+		force_sig(sig);
 
 	/*
 	 * Don't let your children do this ...
@@ -286,5 +287,5 @@ asmlinkage void sys32_sigreturn(void)
 	/* Unreached */
 
 badframe:
-	force_sig(SIGSEGV, current);
+	force_sig(SIGSEGV);
 }

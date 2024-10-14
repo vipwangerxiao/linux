@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Generic parallel printer driver
  *
@@ -144,7 +145,9 @@ static struct lp_struct lp_table[LP_NO];
 static int port_num[LP_NO];
 
 static unsigned int lp_count = 0;
-static struct class *lp_class;
+static const struct class lp_class = {
+	.name = "printer",
+};
 
 #ifdef CONFIG_LP_CONSOLE
 static struct parport *console_registered;
@@ -545,7 +548,7 @@ static int lp_open(struct inode *inode, struct file *file)
 	}
 	/* Determine if the peripheral supports ECP mode */
 	lp_claim_parport_or_block(&lp_table[minor]);
-	if ( (lp_table[minor].dev->port->modes & PARPORT_MODE_ECP) &&
+	if ((lp_table[minor].dev->port->modes & PARPORT_MODE_ECP) &&
 	     !parport_negotiate(lp_table[minor].dev->port,
 				 IEEE1284_MODE_ECP)) {
 		printk(KERN_INFO "lp%d: ECP mode\n", minor);
@@ -589,7 +592,7 @@ static int lp_do_ioctl(unsigned int minor, unsigned int cmd,
 		return -ENODEV;
 	if ((LP_F(minor) & LP_EXIST) == 0)
 		return -ENODEV;
-	switch ( cmd ) {
+	switch (cmd) {
 		case LPTIME:
 			if (arg > UINT_MAX / HZ)
 				return -EINVAL;
@@ -621,7 +624,6 @@ static int lp_do_ioctl(unsigned int minor, unsigned int cmd,
 			break;
 		case LPSETIRQ:
 			return -EINVAL;
-			break;
 		case LPGETIRQ:
 			if (copy_to_user(argp, &LP_IRQ(minor),
 					sizeof(int)))
@@ -712,6 +714,10 @@ static int lp_set_timeout64(unsigned int minor, void __user *arg)
 	if (copy_from_user(karg, arg, sizeof(karg)))
 		return -EFAULT;
 
+	/* sparc64 suseconds_t is 32-bit only */
+	if (IS_ENABLED(CONFIG_SPARC64) && !in_compat_syscall())
+		karg[1] >>= 32;
+
 	return lp_set_timeout(minor, karg[0], karg[1]);
 }
 
@@ -729,7 +735,7 @@ static long lp_ioctl(struct file *file, unsigned int cmd,
 			ret = lp_set_timeout32(minor, (void __user *)arg);
 			break;
 		}
-		/* fall through - for 64-bit */
+		fallthrough;	/* for 64-bit */
 	case LPSETTIMEOUT_NEW:
 		ret = lp_set_timeout64(minor, (void __user *)arg);
 		break;
@@ -757,7 +763,7 @@ static long lp_compat_ioctl(struct file *file, unsigned int cmd,
 			ret = lp_set_timeout32(minor, (void __user *)arg);
 			break;
 		}
-		/* fall through - for x32 mode */
+		fallthrough;	/* for x32 mode */
 	case LPSETTIMEOUT_NEW:
 		ret = lp_set_timeout64(minor, (void __user *)arg);
 		break;
@@ -848,8 +854,10 @@ static void lp_console_write(struct console *co, const char *s,
 			count--;
 			do {
 				written = parport_write(port, crlf, i);
-				if (written > 0)
-					i -= written, crlf += written;
+				if (written > 0) {
+					i -= written;
+					crlf += written;
+				}
 			} while (i > 0 && (CONSOLE_LP_STRICT || written > 0));
 		}
 	} while (count > 0 && (CONSOLE_LP_STRICT || written > 0));
@@ -926,7 +934,7 @@ static int lp_register(int nr, struct parport *port)
 	if (reset)
 		lp_reset(nr);
 
-	device_create(lp_class, port->dev, MKDEV(LP_MAJOR, nr), NULL,
+	device_create(&lp_class, port->dev, MKDEV(LP_MAJOR, nr), NULL,
 		      "lp%d", nr);
 
 	printk(KERN_INFO "lp%d: using %s (%s).\n", nr, port->name,
@@ -998,7 +1006,7 @@ static void lp_detach(struct parport *port)
 		if (port_num[n] == port->number) {
 			port_num[n] = -1;
 			lp_count--;
-			device_destroy(lp_class, MKDEV(LP_MAJOR, n));
+			device_destroy(&lp_class, MKDEV(LP_MAJOR, n));
 			parport_unregister_device(lp_table[n].dev);
 		}
 	}
@@ -1008,12 +1016,11 @@ static struct parport_driver lp_driver = {
 	.name = "lp",
 	.match_port = lp_attach,
 	.detach = lp_detach,
-	.devmodel = true,
 };
 
 static int __init lp_init(void)
 {
-	int i, err = 0;
+	int i, err;
 
 	if (parport_nr[0] == LP_PARPORT_OFF)
 		return 0;
@@ -1043,11 +1050,9 @@ static int __init lp_init(void)
 		return -EIO;
 	}
 
-	lp_class = class_create(THIS_MODULE, "printer");
-	if (IS_ERR(lp_class)) {
-		err = PTR_ERR(lp_class);
+	err = class_register(&lp_class);
+	if (err)
 		goto out_reg;
-	}
 
 	if (parport_register_driver(&lp_driver)) {
 		printk(KERN_ERR "lp: unable to register with parport\n");
@@ -1066,7 +1071,7 @@ static int __init lp_init(void)
 	return 0;
 
 out_class:
-	class_destroy(lp_class);
+	class_unregister(&lp_class);
 out_reg:
 	unregister_chrdev(LP_MAJOR, "lp");
 	return err;
@@ -1109,7 +1114,7 @@ static void lp_cleanup_module(void)
 #endif
 
 	unregister_chrdev(LP_MAJOR, "lp");
-	class_destroy(lp_class);
+	class_unregister(&lp_class);
 }
 
 __setup("lp=", lp_setup);
@@ -1117,4 +1122,5 @@ module_init(lp_init_module);
 module_exit(lp_cleanup_module);
 
 MODULE_ALIAS_CHARDEV_MAJOR(LP_MAJOR);
+MODULE_DESCRIPTION("Generic parallel printer driver");
 MODULE_LICENSE("GPL");

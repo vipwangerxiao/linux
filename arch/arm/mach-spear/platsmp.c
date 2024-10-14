@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * arch/arm/mach-spear13xx/platsmp.c
  *
@@ -5,10 +6,6 @@
  *
  * Copyright (C) 2012 ST Microelectronics Ltd.
  * Shiraz Hashim <shiraz.linux.kernel@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/delay.h>
@@ -17,7 +14,7 @@
 #include <linux/smp.h>
 #include <asm/cacheflush.h>
 #include <asm/smp_scu.h>
-#include <mach/spear.h>
+#include "spear.h"
 #include "generic.h"
 
 /* XXX spear_pen_release is cargo culted code - DO NOT COPY XXX */

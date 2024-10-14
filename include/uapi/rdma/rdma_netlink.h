@@ -15,6 +15,7 @@ enum {
 enum {
 	RDMA_NL_GROUP_IWPM = 2,
 	RDMA_NL_GROUP_LS,
+	RDMA_NL_GROUP_NOTIFY,
 	RDMA_NL_NUM_GROUPS
 };
 
@@ -147,6 +148,18 @@ enum {
 	IWPM_NLA_HELLO_MAX
 };
 
+/* For RDMA_NLDEV_ATTR_DEV_NODE_TYPE */
+enum {
+	/* IB values map to NodeInfo:NodeType. */
+	RDMA_NODE_IB_CA = 1,
+	RDMA_NODE_IB_SWITCH,
+	RDMA_NODE_IB_ROUTER,
+	RDMA_NODE_RNIC,
+	RDMA_NODE_USNIC,
+	RDMA_NODE_USNIC_UDP,
+	RDMA_NODE_UNSPECIFIED,
+};
+
 /*
  * Local service operations:
  *   RESOLVE - The client requests the local service to resolve a path.
@@ -250,7 +263,7 @@ enum rdma_nldev_command {
 
 	RDMA_NLDEV_CMD_PORT_GET, /* can dump */
 
-	RDMA_NLDEV_CMD_SYS_GET, /* can dump */
+	RDMA_NLDEV_CMD_SYS_GET,
 	RDMA_NLDEV_CMD_SYS_SET,
 
 	/* 8 is free to use */
@@ -267,11 +280,35 @@ enum rdma_nldev_command {
 
 	RDMA_NLDEV_CMD_RES_PD_GET, /* can dump */
 
-	RDMA_NLDEV_NUM_OPS
-};
+	RDMA_NLDEV_CMD_GET_CHARDEV,
 
-enum {
-	RDMA_NLDEV_ATTR_ENTRY_STRLEN = 16,
+	RDMA_NLDEV_CMD_STAT_SET,
+
+	RDMA_NLDEV_CMD_STAT_GET, /* can dump */
+
+	RDMA_NLDEV_CMD_STAT_DEL,
+
+	RDMA_NLDEV_CMD_RES_QP_GET_RAW,
+
+	RDMA_NLDEV_CMD_RES_CQ_GET_RAW,
+
+	RDMA_NLDEV_CMD_RES_MR_GET_RAW,
+
+	RDMA_NLDEV_CMD_RES_CTX_GET, /* can dump */
+
+	RDMA_NLDEV_CMD_RES_SRQ_GET, /* can dump */
+
+	RDMA_NLDEV_CMD_STAT_GET_STATUS,
+
+	RDMA_NLDEV_CMD_RES_SRQ_GET_RAW,
+
+	RDMA_NLDEV_CMD_NEWDEV,
+
+	RDMA_NLDEV_CMD_DELDEV,
+
+	RDMA_NLDEV_CMD_MONITOR,
+
+	RDMA_NLDEV_NUM_OPS
 };
 
 enum rdma_nldev_print_type {
@@ -478,10 +515,129 @@ enum rdma_nldev_attr {
 	 * File descriptor handle of the net namespace object
 	 */
 	RDMA_NLDEV_NET_NS_FD,			/* u32 */
+	/*
+	 * Information about a chardev.
+	 * CHARDEV_TYPE is the name of the chardev ABI (ie uverbs, umad, etc)
+	 * CHARDEV_ABI signals the ABI revision (historical)
+	 * CHARDEV_NAME is the kernel name for the /dev/ file (no directory)
+	 * CHARDEV is the 64 bit dev_t for the inode
+	 */
+	RDMA_NLDEV_ATTR_CHARDEV_TYPE,		/* string */
+	RDMA_NLDEV_ATTR_CHARDEV_NAME,		/* string */
+	RDMA_NLDEV_ATTR_CHARDEV_ABI,		/* u64 */
+	RDMA_NLDEV_ATTR_CHARDEV,		/* u64 */
+	RDMA_NLDEV_ATTR_UVERBS_DRIVER_ID,       /* u64 */
+	/*
+	 * Counter-specific attributes.
+	 */
+	RDMA_NLDEV_ATTR_STAT_MODE,		/* u32 */
+	RDMA_NLDEV_ATTR_STAT_RES,		/* u32 */
+	RDMA_NLDEV_ATTR_STAT_AUTO_MODE_MASK,	/* u32 */
+	RDMA_NLDEV_ATTR_STAT_COUNTER,		/* nested table */
+	RDMA_NLDEV_ATTR_STAT_COUNTER_ENTRY,	/* nested table */
+	RDMA_NLDEV_ATTR_STAT_COUNTER_ID,	/* u32 */
+	RDMA_NLDEV_ATTR_STAT_HWCOUNTERS,	/* nested table */
+	RDMA_NLDEV_ATTR_STAT_HWCOUNTER_ENTRY,	/* nested table */
+	RDMA_NLDEV_ATTR_STAT_HWCOUNTER_ENTRY_NAME,	/* string */
+	RDMA_NLDEV_ATTR_STAT_HWCOUNTER_ENTRY_VALUE,	/* u64 */
 
+	/*
+	 * CQ adaptive moderatio (DIM)
+	 */
+	RDMA_NLDEV_ATTR_DEV_DIM,                /* u8 */
+
+	RDMA_NLDEV_ATTR_RES_RAW,	/* binary */
+
+	RDMA_NLDEV_ATTR_RES_CTX,		/* nested table */
+	RDMA_NLDEV_ATTR_RES_CTX_ENTRY,		/* nested table */
+
+	RDMA_NLDEV_ATTR_RES_SRQ,		/* nested table */
+	RDMA_NLDEV_ATTR_RES_SRQ_ENTRY,		/* nested table */
+	RDMA_NLDEV_ATTR_RES_SRQN,		/* u32 */
+
+	RDMA_NLDEV_ATTR_MIN_RANGE,		/* u32 */
+	RDMA_NLDEV_ATTR_MAX_RANGE,		/* u32 */
+
+	RDMA_NLDEV_SYS_ATTR_COPY_ON_FORK,	/* u8 */
+
+	RDMA_NLDEV_ATTR_STAT_HWCOUNTER_INDEX,	/* u32 */
+	RDMA_NLDEV_ATTR_STAT_HWCOUNTER_DYNAMIC, /* u8 */
+
+	RDMA_NLDEV_SYS_ATTR_PRIVILEGED_QKEY_MODE, /* u8 */
+
+	RDMA_NLDEV_ATTR_DRIVER_DETAILS,		/* u8 */
+	/*
+	 * QP subtype string, used for driver QPs
+	 */
+	RDMA_NLDEV_ATTR_RES_SUBTYPE,		/* string */
+
+	RDMA_NLDEV_ATTR_DEV_TYPE,		/* u8 */
+
+	RDMA_NLDEV_ATTR_PARENT_NAME,		/* string */
+
+	RDMA_NLDEV_ATTR_NAME_ASSIGN_TYPE,	/* u8 */
+
+	RDMA_NLDEV_ATTR_EVENT_TYPE,		/* u8 */
+
+	RDMA_NLDEV_SYS_ATTR_MONITOR_MODE,	/* u8 */
 	/*
 	 * Always the end
 	 */
 	RDMA_NLDEV_ATTR_MAX
 };
+
+/*
+ * Supported counter bind modes. All modes are mutual-exclusive.
+ */
+enum rdma_nl_counter_mode {
+	RDMA_COUNTER_MODE_NONE,
+
+	/*
+	 * A qp is bound with a counter automatically during initialization
+	 * based on the auto mode (e.g., qp type, ...)
+	 */
+	RDMA_COUNTER_MODE_AUTO,
+
+	/*
+	 * Which qp are bound with which counter is explicitly specified
+	 * by the user
+	 */
+	RDMA_COUNTER_MODE_MANUAL,
+
+	/*
+	 * Always the end
+	 */
+	RDMA_COUNTER_MODE_MAX,
+};
+
+/*
+ * Supported criteria in counter auto mode.
+ * Currently only "qp type" is supported
+ */
+enum rdma_nl_counter_mask {
+	RDMA_COUNTER_MASK_QP_TYPE = 1,
+	RDMA_COUNTER_MASK_PID = 1 << 1,
+};
+
+/* Supported rdma device types. */
+enum rdma_nl_dev_type {
+	RDMA_DEVICE_TYPE_SMI = 1,
+};
+
+/* RDMA device name assignment types */
+enum rdma_nl_name_assign_type {
+	RDMA_NAME_ASSIGN_TYPE_UNKNOWN = 0,
+	RDMA_NAME_ASSIGN_TYPE_USER = 1, /* Provided by user-space */
+};
+
+/*
+ * Supported rdma monitoring event types.
+ */
+enum rdma_nl_notify_event_type {
+	RDMA_REGISTER_EVENT,
+	RDMA_UNREGISTER_EVENT,
+	RDMA_NETDEV_ATTACH_EVENT,
+	RDMA_NETDEV_DETACH_EVENT,
+};
+
 #endif /* _UAPI_RDMA_NETLINK_H */

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * TI AEMIF driver
  *
@@ -6,10 +7,6 @@
  * Authors:
  * Murali Karicheri <m-karicheri2@ti.com>
  * Ivan Khoronzhuk <ivan.khoronzhuk@ti.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
@@ -20,7 +17,6 @@
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
-#include <linux/platform_data/ti-aemif.h>
 
 #define TA_SHIFT	2
 #define RHOLD_SHIFT	4
@@ -30,7 +26,7 @@
 #define WSTROBE_SHIFT	20
 #define WSETUP_SHIFT	26
 #define EW_SHIFT	30
-#define SS_SHIFT	31
+#define SSTROBE_SHIFT	31
 
 #define TA(x)		((x) << TA_SHIFT)
 #define RHOLD(x)	((x) << RHOLD_SHIFT)
@@ -40,7 +36,7 @@
 #define WSTROBE(x)	((x) << WSTROBE_SHIFT)
 #define WSETUP(x)	((x) << WSETUP_SHIFT)
 #define EW(x)		((x) << EW_SHIFT)
-#define SS(x)		((x) << SS_SHIFT)
+#define SSTROBE(x)	((x) << SSTROBE_SHIFT)
 
 #define ASIZE_MAX	0x1
 #define TA_MAX		0x3
@@ -51,7 +47,7 @@
 #define WSTROBE_MAX	0x3f
 #define WSETUP_MAX	0xf
 #define EW_MAX		0x1
-#define SS_MAX		0x1
+#define SSTROBE_MAX	0x1
 #define NUM_CS		4
 
 #define TA_VAL(x)	(((x) & TA(TA_MAX)) >> TA_SHIFT)
@@ -62,7 +58,7 @@
 #define WSTROBE_VAL(x)	(((x) & WSTROBE(WSTROBE_MAX)) >> WSTROBE_SHIFT)
 #define WSETUP_VAL(x)	(((x) & WSETUP(WSETUP_MAX)) >> WSETUP_SHIFT)
 #define EW_VAL(x)	(((x) & EW(EW_MAX)) >> EW_SHIFT)
-#define SS_VAL(x)	(((x) & SS(SS_MAX)) >> SS_SHIFT)
+#define SSTROBE_VAL(x)	(((x) & SSTROBE(SSTROBE_MAX)) >> SSTROBE_SHIFT)
 
 #define NRCSR_OFFSET	0x00
 #define AWCCR_OFFSET	0x04
@@ -70,7 +66,7 @@
 
 #define ACR_ASIZE_MASK	0x3
 #define ACR_EW_MASK	BIT(30)
-#define ACR_SS_MASK	BIT(31)
+#define ACR_SSTROBE_MASK	BIT(31)
 #define ASIZE_16BIT	1
 
 #define CONFIG_MASK	(TA(TA_MAX) | \
@@ -80,7 +76,7 @@
 				WHOLD(WHOLD_MAX) | \
 				WSTROBE(WSTROBE_MAX) | \
 				WSETUP(WSETUP_MAX) | \
-				EW(EW_MAX) | SS(SS_MAX) | \
+				EW(EW_MAX) | SSTROBE(SSTROBE_MAX) | \
 				ASIZE_MAX)
 
 /**
@@ -207,7 +203,7 @@ static int aemif_config_abus(struct platform_device *pdev, int csnum)
 	if (data->enable_ew)
 		set |= ACR_EW_MASK;
 	if (data->enable_ss)
-		set |= ACR_SS_MASK;
+		set |= ACR_SSTROBE_MASK;
 
 	val = readl(aemif->base + offset);
 	val &= ~CONFIG_MASK;
@@ -249,7 +245,7 @@ static void aemif_get_hw_params(struct platform_device *pdev, int csnum)
 	data->wstrobe = aemif_cycles_to_nsec(WSTROBE_VAL(val), clk_rate);
 	data->wsetup = aemif_cycles_to_nsec(WSETUP_VAL(val), clk_rate);
 	data->enable_ew = EW_VAL(val);
-	data->enable_ss = SS_VAL(val);
+	data->enable_ss = SSTROBE_VAL(val);
 	data->asize = val & ASIZE_MAX;
 }
 
@@ -331,46 +327,29 @@ static int aemif_probe(struct platform_device *pdev)
 {
 	int i;
 	int ret = -ENODEV;
-	struct resource *res;
 	struct device *dev = &pdev->dev;
 	struct device_node *np = dev->of_node;
-	struct device_node *child_np;
 	struct aemif_device *aemif;
-	struct aemif_platform_data *pdata;
-	struct of_dev_auxdata *dev_lookup;
 
 	aemif = devm_kzalloc(dev, sizeof(*aemif), GFP_KERNEL);
 	if (!aemif)
 		return -ENOMEM;
 
-	pdata = dev_get_platdata(&pdev->dev);
-	dev_lookup = pdata ? pdata->dev_lookup : NULL;
-
 	platform_set_drvdata(pdev, aemif);
 
-	aemif->clk = devm_clk_get(dev, NULL);
-	if (IS_ERR(aemif->clk)) {
-		dev_err(dev, "cannot get clock 'aemif'\n");
-		return PTR_ERR(aemif->clk);
-	}
-
-	ret = clk_prepare_enable(aemif->clk);
-	if (ret)
-		return ret;
+	aemif->clk = devm_clk_get_enabled(dev, NULL);
+	if (IS_ERR(aemif->clk))
+		return dev_err_probe(dev, PTR_ERR(aemif->clk),
+				     "cannot get clock 'aemif'\n");
 
 	aemif->clk_rate = clk_get_rate(aemif->clk) / MSEC_PER_SEC;
 
 	if (np && of_device_is_compatible(np, "ti,da850-aemif"))
 		aemif->cs_offset = 2;
-	else if (pdata)
-		aemif->cs_offset = pdata->cs_offset;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	aemif->base = devm_ioremap_resource(dev, res);
-	if (IS_ERR(aemif->base)) {
-		ret = PTR_ERR(aemif->base);
-		goto error;
-	}
+	aemif->base = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(aemif->base))
+		return PTR_ERR(aemif->base);
 
 	if (np) {
 		/*
@@ -379,15 +358,10 @@ static int aemif_probe(struct platform_device *pdev)
 		 * functions iterate over these nodes and update the cs data
 		 * array.
 		 */
-		for_each_available_child_of_node(np, child_np) {
+		for_each_available_child_of_node_scoped(np, child_np) {
 			ret = of_aemif_parse_abus_config(pdev, child_np);
 			if (ret < 0)
-				goto error;
-		}
-	} else if (pdata && pdata->num_abus_data > 0) {
-		for (i = 0; i < pdata->num_abus_data; i++, aemif->num_cs++) {
-			aemif->cs_data[i].cs = pdata->abus_data[i].cs;
-			aemif_get_hw_params(pdev, i);
+				return ret;
 		}
 	}
 
@@ -396,7 +370,7 @@ static int aemif_probe(struct platform_device *pdev)
 		if (ret < 0) {
 			dev_err(dev, "Error configuring chip select %d\n",
 				aemif->cs_data[i].cs);
-			goto error;
+			return ret;
 		}
 	}
 
@@ -405,40 +379,18 @@ static int aemif_probe(struct platform_device *pdev)
 	 * child will be probed after the AEMIF timing parameters are set.
 	 */
 	if (np) {
-		for_each_available_child_of_node(np, child_np) {
-			ret = of_platform_populate(child_np, NULL,
-						   dev_lookup, dev);
+		for_each_available_child_of_node_scoped(np, child_np) {
+			ret = of_platform_populate(child_np, NULL, NULL, dev);
 			if (ret < 0)
-				goto error;
-		}
-	} else if (pdata) {
-		for (i = 0; i < pdata->num_sub_devices; i++) {
-			pdata->sub_devices[i].dev.parent = dev;
-			ret = platform_device_register(&pdata->sub_devices[i]);
-			if (ret) {
-				dev_warn(dev, "Error register sub device %s\n",
-					 pdata->sub_devices[i].name);
-			}
+				return ret;
 		}
 	}
 
-	return 0;
-error:
-	clk_disable_unprepare(aemif->clk);
-	return ret;
-}
-
-static int aemif_remove(struct platform_device *pdev)
-{
-	struct aemif_device *aemif = platform_get_drvdata(pdev);
-
-	clk_disable_unprepare(aemif->clk);
 	return 0;
 }
 
 static struct platform_driver aemif_driver = {
 	.probe = aemif_probe,
-	.remove = aemif_remove,
 	.driver = {
 		.name = "ti-aemif",
 		.of_match_table = of_match_ptr(aemif_of_match),

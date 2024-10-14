@@ -36,9 +36,9 @@
 #include <linux/ipv6.h>
 #include <linux/version.h>
 #include <sys/socket.h>
-#include "bpf_helpers.h"
+#include <bpf/bpf_helpers.h>
 
-#define _(P) ({typeof(P) val = 0; bpf_probe_read(&val, sizeof(val), &P); val;})
+#define _(P) ({typeof(P) val = 0; bpf_probe_read_kernel(&val, sizeof(val), &P); val;})
 #define TCP_ESTATS_MAGIC 0xBAADBEEF
 
 /* This test case needs "sock" and "pt_regs" data structure.
@@ -148,12 +148,12 @@ struct tcp_estats_basic_event {
 	struct tcp_estats_conn_id conn_id;
 };
 
-struct bpf_map_def SEC("maps") ev_record_map = {
-	.type = BPF_MAP_TYPE_HASH,
-	.key_size = sizeof(__u32),
-	.value_size = sizeof(struct tcp_estats_basic_event),
-	.max_entries = 1024,
-};
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1024);
+	__type(key, __u32);
+	__type(value, struct tcp_estats_basic_event);
+} ev_record_map SEC(".maps");
 
 struct dummy_tracepoint_args {
 	unsigned long long pad;
@@ -244,7 +244,7 @@ static __always_inline void send_basic_event(struct sock *sk,
 	bpf_map_update_elem(&ev_record_map, &key, &ev, BPF_ANY);
 }
 
-SEC("dummy_tracepoint")
+SEC("tp/dummy/tracepoint")
 int _dummy_tracepoint(struct dummy_tracepoint_args *arg)
 {
 	if (!arg->sock)
@@ -255,4 +255,3 @@ int _dummy_tracepoint(struct dummy_tracepoint_args *arg)
 }
 
 char _license[] SEC("license") = "GPL";
-__u32 _version SEC("version") = 1; /* ignored by tracepoints, required by libbpf.a */

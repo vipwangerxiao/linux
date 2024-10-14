@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Tegra124 DFLL FCPU clock source driver
  *
@@ -5,23 +6,13 @@
  *
  * Aleksandr Frid <afrid@nvidia.com>
  * Paul Walmsley <pwalmsley@nvidia.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
  */
 
 #include <linux/cpu.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <soc/tegra/fuse.h>
@@ -546,7 +537,7 @@ static void get_alignment_from_dt(struct device *dev,
 static int get_alignment_from_regulator(struct device *dev,
 					 struct rail_alignment *align)
 {
-	struct regulator *reg = devm_regulator_get(dev, "vdd-cpu");
+	struct regulator *reg = regulator_get(dev, "vdd-cpu");
 
 	if (IS_ERR(reg))
 		return PTR_ERR(reg);
@@ -554,7 +545,7 @@ static int get_alignment_from_regulator(struct device *dev,
 	align->offset_uv = regulator_list_voltage(reg, 0);
 	align->step_uv = regulator_get_linear_step(reg);
 
-	devm_regulator_put(reg);
+	regulator_put(reg);
 
 	return 0;
 }
@@ -621,25 +612,25 @@ static int tegra124_dfll_fcpu_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int tegra124_dfll_fcpu_remove(struct platform_device *pdev)
+static void tegra124_dfll_fcpu_remove(struct platform_device *pdev)
 {
 	struct tegra_dfll_soc_data *soc;
 
+	/*
+	 * Note that exiting early here is dangerous as after this function
+	 * returns *soc is freed.
+	 */
 	soc = tegra_dfll_unregister(pdev);
-	if (IS_ERR(soc)) {
-		dev_err(&pdev->dev, "failed to unregister DFLL: %ld\n",
-			PTR_ERR(soc));
-		return PTR_ERR(soc);
-	}
+	if (IS_ERR(soc))
+		return;
 
 	tegra_cvb_remove_opp_table(soc->dev, soc->cvb, soc->max_freq);
-
-	return 0;
 }
 
 static const struct dev_pm_ops tegra124_dfll_pm_ops = {
 	SET_RUNTIME_PM_OPS(tegra_dfll_runtime_suspend,
 			   tegra_dfll_runtime_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(tegra_dfll_suspend, tegra_dfll_resume)
 };
 
 static struct platform_driver tegra124_dfll_fcpu_driver = {

@@ -1,28 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /******************************************************************************
  *
- * Copyright(c) 2003 - 2014 Intel Corporation. All rights reserved.
+ * Copyright(c) 2003 - 2014, 2018 - 2022 Intel Corporation. All rights reserved.
+ * Copyright(c) 2024 Intel Corporation. All rights reserved.
  * Copyright(c) 2015 Intel Deutschland GmbH
- * Copyright (C) 2018 Intel Corporation
  *
  * Portions of this file are derived from the ipw3945 project, as well
  * as portions of the ieee80211 subsystem header files.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * The full GNU General Public License is included in this distribution in the
- * file called LICENSE.
- *
- * Contact Information:
- *  Intel Linux Wireless <linuxwifi@intel.com>
- * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
- *
  *****************************************************************************/
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -42,8 +26,7 @@
 
 #include <asm/div64.h>
 
-#include "iwl-eeprom-read.h"
-#include "iwl-eeprom-parse.h"
+#include "iwl-nvm-utils.h"
 #include "iwl-io.h"
 #include "iwl-trans.h"
 #include "iwl-op-mode.h"
@@ -64,8 +47,8 @@
 
 #define DRV_DESCRIPTION	"Intel(R) Wireless WiFi Link AGN driver for Linux"
 MODULE_DESCRIPTION(DRV_DESCRIPTION);
-MODULE_AUTHOR(DRV_COPYRIGHT " " DRV_AUTHOR);
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS(IWLWIFI);
 
 /* Please keep this array *SORTED* by hex value.
  * Access is done through binary search.
@@ -301,7 +284,7 @@ static void iwl_bg_beacon_update(struct work_struct *work)
 	}
 
 	/* Pull updated AP beacon from mac80211. will fail if not in AP mode */
-	beacon = ieee80211_beacon_get(priv->hw, priv->beacon_ctx->vif);
+	beacon = ieee80211_beacon_get(priv->hw, priv->beacon_ctx->vif, 0);
 	if (!beacon) {
 		IWL_ERR(priv, "update beacon failed -- keeping old\n");
 		goto out;
@@ -386,7 +369,7 @@ int iwl_send_statistics_request(struct iwl_priv *priv, u8 flags, bool clear)
 					&statistics_cmd);
 }
 
-/**
+/*
  * iwl_bg_statistics_periodic - Timer callback to queue statistics
  *
  * This callback is provided in order to send a statistics request.
@@ -418,7 +401,6 @@ static void iwl_print_cont_event_trace(struct iwl_priv *priv, u32 base,
 	u32 i;
 	u32 ptr;        /* SRAM byte address of log data */
 	u32 ev, time, data; /* event log data */
-	unsigned long reg_flags;
 
 	if (mode == 0)
 		ptr = base + (4 * sizeof(u32)) + (start_idx * 2 * sizeof(u32));
@@ -426,7 +408,7 @@ static void iwl_print_cont_event_trace(struct iwl_priv *priv, u32 base,
 		ptr = base + (4 * sizeof(u32)) + (start_idx * 3 * sizeof(u32));
 
 	/* Make sure device is powered up for SRAM reads */
-	if (!iwl_trans_grab_nic_access(priv->trans, &reg_flags))
+	if (!iwl_trans_grab_nic_access(priv->trans))
 		return;
 
 	/* Set starting address; reads will auto-increment */
@@ -458,7 +440,7 @@ static void iwl_print_cont_event_trace(struct iwl_priv *priv, u32 base,
 		}
 	}
 	/* Allow device to power down */
-	iwl_trans_release_nic_access(priv->trans, &reg_flags);
+	iwl_trans_release_nic_access(priv->trans);
 }
 
 static void iwl_continuous_event_trace(struct iwl_priv *priv)
@@ -545,7 +527,7 @@ static void iwl_continuous_event_trace(struct iwl_priv *priv)
 	priv->event_log.next_entry = next_entry;
 }
 
-/**
+/*
  * iwl_bg_ucode_trace - Timer callback to log ucode event
  *
  * The timer is continually set to execute every
@@ -774,7 +756,7 @@ static void iwl_send_bt_config(struct iwl_priv *priv)
 		IWL_ERR(priv, "failed to send BT Coex Config\n");
 }
 
-/**
+/*
  * iwl_alive_start - called after REPLY_ALIVE notification received
  *                   from protocol/runtime uCode (initialization uCode's
  *                   Alive gets handled by iwl_init_alive_start()).
@@ -1266,7 +1248,7 @@ static struct iwl_op_mode *iwl_op_mode_dvm_start(struct iwl_trans *trans,
 	 ************************/
 	hw = iwl_alloc_all();
 	if (!hw) {
-		pr_err("%s: Cannot allocate network device\n", cfg->name);
+		pr_err("%s: Cannot allocate network device\n", trans->name);
 		goto out;
 	}
 
@@ -1278,7 +1260,7 @@ static struct iwl_op_mode *iwl_op_mode_dvm_start(struct iwl_trans *trans,
 	priv->cfg = cfg;
 	priv->fw = fw;
 
-	switch (priv->cfg->device_family) {
+	switch (priv->trans->trans_cfg->device_family) {
 	case IWL_DEVICE_FAMILY_1000:
 	case IWL_DEVICE_FAMILY_100:
 		priv->lib = &iwl_dvm_1000_cfg;
@@ -1343,8 +1325,6 @@ static struct iwl_op_mode *iwl_op_mode_dvm_start(struct iwl_trans *trans,
 		       iwlwifi_mod_params.amsdu_size);
 	}
 
-	trans_cfg.cmd_q_wdg_timeout = IWL_WATCHDOG_DISABLED;
-
 	trans_cfg.command_groups = iwl_dvm_groups;
 	trans_cfg.command_groups_size = ARRAY_SIZE(iwl_dvm_groups);
 
@@ -1353,7 +1333,7 @@ static struct iwl_op_mode *iwl_op_mode_dvm_start(struct iwl_trans *trans,
 					  driver_data[2]);
 
 	WARN_ON(sizeof(priv->transport_queue_stop) * BITS_PER_BYTE <
-		priv->cfg->base_params->num_of_queues);
+		priv->trans->trans_cfg->base_params->num_of_queues);
 
 	ucode_flags = fw->ucode_capa.flags;
 
@@ -1381,12 +1361,6 @@ static struct iwl_op_mode *iwl_op_mode_dvm_start(struct iwl_trans *trans,
 
 	IWL_DEBUG_INFO(priv, "*** LOAD DRIVER ***\n");
 
-	/* is antenna coupling more than 35dB ? */
-	priv->bt_ant_couple_ok =
-		(iwlwifi_mod_params.antenna_coupling >
-			IWL_BT_ANTENNA_COUPLING_THRESHOLD) ?
-			true : false;
-
 	/* bt channel inhibition enabled*/
 	priv->bt_ch_announce = true;
 	IWL_DEBUG_INFO(priv, "BT channel inhibition is %s\n",
@@ -1401,7 +1375,7 @@ static struct iwl_op_mode *iwl_op_mode_dvm_start(struct iwl_trans *trans,
 	 * 2. Read REV register
 	 ***********************/
 	IWL_INFO(priv, "Detected %s, REV=0x%X\n",
-		priv->cfg->name, priv->trans->hw_rev);
+		priv->trans->name, priv->trans->hw_rev);
 
 	if (iwl_trans_start_hw(priv->trans))
 		goto out_free_hw;
@@ -1416,9 +1390,9 @@ static struct iwl_op_mode *iwl_op_mode_dvm_start(struct iwl_trans *trans,
 	/* Reset chip to save power until we load uCode during "up". */
 	iwl_trans_stop_device(priv->trans);
 
-	priv->nvm_data = iwl_parse_eeprom_data(priv->trans->dev, priv->cfg,
-						  priv->eeprom_blob,
-						  priv->eeprom_blob_size);
+	priv->nvm_data = iwl_parse_eeprom_data(priv->trans, priv->cfg,
+					       priv->eeprom_blob,
+					       priv->eeprom_blob_size);
 	if (!priv->nvm_data)
 		goto out_free_eeprom_blob;
 
@@ -1488,7 +1462,7 @@ static struct iwl_op_mode *iwl_op_mode_dvm_start(struct iwl_trans *trans,
 
 	snprintf(priv->hw->wiphy->fw_version,
 		 sizeof(priv->hw->wiphy->fw_version),
-		 "%s", fw->fw_version);
+		 "%.31s", fw->fw_version);
 
 	priv->new_scan_threshold_behaviour =
 		!!(ucode_flags & IWL_UCODE_TLV_FLAGS_NEWSCAN);
@@ -1544,7 +1518,6 @@ static void iwl_op_mode_dvm_stop(struct iwl_op_mode *op_mode)
 	kfree(priv->nvm_data);
 
 	/*netif_stop_queue(dev); */
-	flush_workqueue(priv->workqueue);
 
 	/* ieee80211_unregister_hw calls iwlagn_mac_stop, which flushes
 	 * priv->workqueue... so we can't take down the workqueue
@@ -1700,9 +1673,8 @@ static void iwl_dump_nic_error_log(struct iwl_priv *priv)
 
 #define EVENT_START_OFFSET  (4 * sizeof(u32))
 
-/**
+/*
  * iwl_print_event_log - Dump error event log to syslog
- *
  */
 static int iwl_print_event_log(struct iwl_priv *priv, u32 start_idx,
 			       u32 num_events, u32 mode,
@@ -1713,7 +1685,6 @@ static int iwl_print_event_log(struct iwl_priv *priv, u32 start_idx,
 	u32 event_size; /* 2 u32s, or 3 u32s if timestamp recorded */
 	u32 ptr;        /* SRAM byte address of log data */
 	u32 ev, time, data; /* event log data */
-	unsigned long reg_flags;
 
 	struct iwl_trans *trans = priv->trans;
 
@@ -1737,7 +1708,7 @@ static int iwl_print_event_log(struct iwl_priv *priv, u32 start_idx,
 	ptr = base + EVENT_START_OFFSET + (start_idx * event_size);
 
 	/* Make sure device is powered up for SRAM reads */
-	if (!iwl_trans_grab_nic_access(trans, &reg_flags))
+	if (!iwl_trans_grab_nic_access(trans))
 		return pos;
 
 	/* Set starting address; reads will auto-increment */
@@ -1776,11 +1747,11 @@ static int iwl_print_event_log(struct iwl_priv *priv, u32 start_idx,
 	}
 
 	/* Allow device to power down */
-	iwl_trans_release_nic_access(trans, &reg_flags);
+	iwl_trans_release_nic_access(trans);
 	return pos;
 }
 
-/**
+/*
  * iwl_print_last_event_logs - Dump the newest # of event log to syslog
  */
 static int iwl_print_last_event_logs(struct iwl_priv *priv, u32 capacity,
@@ -1971,7 +1942,7 @@ static void iwlagn_fw_error(struct iwl_priv *priv, bool ondemand)
 	}
 }
 
-static void iwl_nic_error(struct iwl_op_mode *op_mode)
+static void iwl_nic_error(struct iwl_op_mode *op_mode, bool sync)
 {
 	struct iwl_priv *priv = IWL_OP_MODE_GET_DVM(op_mode);
 
@@ -2002,12 +1973,8 @@ static void iwl_nic_config(struct iwl_op_mode *op_mode)
 
 	/* SKU Control */
 	iwl_trans_set_bits_mask(priv->trans, CSR_HW_IF_CONFIG_REG,
-				CSR_HW_IF_CONFIG_REG_MSK_MAC_DASH |
-				CSR_HW_IF_CONFIG_REG_MSK_MAC_STEP,
-				(CSR_HW_REV_STEP(priv->trans->hw_rev) <<
-					CSR_HW_IF_CONFIG_REG_POS_MAC_STEP) |
-				(CSR_HW_REV_DASH(priv->trans->hw_rev) <<
-					CSR_HW_IF_CONFIG_REG_POS_MAC_DASH));
+				CSR_HW_IF_CONFIG_REG_MSK_MAC_STEP_DASH,
+				CSR_HW_REV_STEP_DASH(priv->trans->hw_rev));
 
 	/* write radio config values to register */
 	if (priv->nvm_data->radio_cfg_type <= EEPROM_RF_CONFIG_TYPE_MAX) {

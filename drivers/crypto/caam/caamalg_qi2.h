@@ -7,15 +7,18 @@
 #ifndef _CAAMALG_QI2_H_
 #define _CAAMALG_QI2_H_
 
+#include <crypto/internal/skcipher.h>
+#include <linux/compiler_attributes.h>
 #include <soc/fsl/dpaa2-io.h>
 #include <soc/fsl/dpaa2-fd.h>
 #include <linux/threads.h>
+#include <linux/netdevice.h>
 #include "dpseci.h"
 #include "desc_constr.h"
 
 #define DPAA2_CAAM_STORE_SIZE	16
 /* NAPI weight *must* be a multiple of the store size. */
-#define DPAA2_CAAM_NAPI_WEIGHT	64
+#define DPAA2_CAAM_NAPI_WEIGHT	512
 
 /* The congestion entrance threshold was chosen so that on LS2088
  * we support the maximum throughput for the available memory
@@ -34,8 +37,6 @@
  * @tx_queue_attr: array of Tx queue attributes
  * @cscn_mem: pointer to memory region containing the congestion SCN
  *	it's size is larger than to accommodate alignment
- * @cscn_mem_aligned: pointer to congestion SCN; it is computed as
- *	PTR_ALIGN(cscn_mem, DPAA2_CSCN_ALIGN)
  * @cscn_dma: dma address used by the QMAN to write CSCN messages
  * @dev: device associated with the DPSECI object
  * @mc_io: pointer to MC portal's I/O object
@@ -56,7 +57,6 @@ struct dpaa2_caam_priv {
 
 	/* congestion */
 	void *cscn_mem;
-	void *cscn_mem_aligned;
 	dma_addr_t cscn_dma;
 
 	struct device *dev;
@@ -64,6 +64,7 @@ struct dpaa2_caam_priv {
 	struct iommu_domain *domain;
 
 	struct dpaa2_caam_priv_per_cpu __percpu *ppriv;
+	struct dentry *dfs_root;
 };
 
 /**
@@ -80,7 +81,7 @@ struct dpaa2_caam_priv {
  */
 struct dpaa2_caam_priv_per_cpu {
 	struct napi_struct napi;
-	struct net_device net_dev;
+	struct net_device *net_dev;
 	int req_fqid;
 	int rsp_fqid;
 	int prio;
@@ -89,33 +90,6 @@ struct dpaa2_caam_priv_per_cpu {
 	struct dpaa2_caam_priv *priv;
 	struct dpaa2_io *dpio;
 };
-
-/*
- * The CAAM QI hardware constructs a job descriptor which points
- * to shared descriptor (as pointed by context_a of FQ to CAAM).
- * When the job descriptor is executed by deco, the whole job
- * descriptor together with shared descriptor gets loaded in
- * deco buffer which is 64 words long (each 32-bit).
- *
- * The job descriptor constructed by QI hardware has layout:
- *
- *	HEADER		(1 word)
- *	Shdesc ptr	(1 or 2 words)
- *	SEQ_OUT_PTR	(1 word)
- *	Out ptr		(1 or 2 words)
- *	Out length	(1 word)
- *	SEQ_IN_PTR	(1 word)
- *	In ptr		(1 or 2 words)
- *	In length	(1 word)
- *
- * The shdesc ptr is used to fetch shared descriptor contents
- * into deco buffer.
- *
- * Apart from shdesc contents, the total number of words that
- * get loaded in deco buffer are '8' or '11'. The remaining words
- * in deco buffer can be used for storing shared descriptor.
- */
-#define MAX_SDLEN	((CAAM_DESC_BYTES_MAX - DESC_JOB_IO_LEN) / CAAM_CMD_SZ)
 
 /* Length of a single buffer in the QI driver memory cache */
 #define CAAM_QI_MEMCACHE_SIZE	512
@@ -139,7 +113,7 @@ struct aead_edesc {
 	dma_addr_t qm_sg_dma;
 	unsigned int assoclen;
 	dma_addr_t assoclen_dma;
-	struct dpaa2_sg_entry sgt[0];
+	struct dpaa2_sg_entry sgt[];
 };
 
 /*
@@ -157,7 +131,7 @@ struct skcipher_edesc {
 	dma_addr_t iv_dma;
 	int qm_sg_bytes;
 	dma_addr_t qm_sg_dma;
-	struct dpaa2_sg_entry sgt[0];
+	struct dpaa2_sg_entry sgt[];
 };
 
 /*
@@ -171,7 +145,7 @@ struct ahash_edesc {
 	dma_addr_t qm_sg_dma;
 	int src_nents;
 	int qm_sg_bytes;
-	struct dpaa2_sg_entry sgt[0];
+	struct dpaa2_sg_entry sgt[];
 };
 
 /**
@@ -182,7 +156,7 @@ struct ahash_edesc {
 struct caam_flc {
 	u32 flc[16];
 	u32 sh_desc[MAX_SDLEN];
-} ____cacheline_aligned;
+} __aligned(CRYPTO_DMA_ALIGN);
 
 enum optype {
 	ENCRYPT = 0,
@@ -204,13 +178,14 @@ enum optype {
  * @edesc: extended descriptor; points to one of {skcipher,aead}_edesc
  */
 struct caam_request {
-	struct dpaa2_fl_entry fd_flt[2];
+	struct dpaa2_fl_entry fd_flt[2] __aligned(CRYPTO_DMA_ALIGN);
 	dma_addr_t fd_flt_dma;
 	struct caam_flc *flc;
 	dma_addr_t flc_dma;
 	void (*cbk)(void *ctx, u32 err);
 	void *ctx;
 	void *edesc;
+	struct skcipher_request fallback_req;
 };
 
 /**

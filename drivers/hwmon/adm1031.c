@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * adm1031.c - Part of lm_sensors, Linux kernel modules for hardware
  *	       monitoring
@@ -5,20 +6,6 @@
  * Supports adm1030 / adm1031
  * Copyright (C) 2004 Alexandre d'Alton <alex@alexdalton.org>
  * Reworked by Jean Delvare <jdelvare@suse.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/module.h>
@@ -78,7 +65,7 @@ struct adm1031_data {
 	const struct attribute_group *groups[3];
 	struct mutex update_lock;
 	int chip_type;
-	char valid;		/* !=0 if following fields are valid */
+	bool valid;		/* true if following fields are valid */
 	unsigned long last_updated;	/* In jiffies */
 	unsigned int update_interval;	/* In milliseconds */
 	/*
@@ -200,7 +187,7 @@ static struct adm1031_data *adm1031_update_device(struct device *dev)
 					ADM1031_REG_PWM) >> (4 * chan)) & 0x0f;
 		}
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 	}
 
 	mutex_unlock(&data->update_lock);
@@ -255,9 +242,8 @@ static int FAN_TO_REG(int reg, int div)
 static int AUTO_TEMP_MAX_TO_REG(int val, int reg, int pwm)
 {
 	int ret;
-	int range = val - AUTO_TEMP_MIN_FROM_REG(reg);
+	int range = ((val - AUTO_TEMP_MIN_FROM_REG(reg)) * 10) / (16 - pwm);
 
-	range = ((val - AUTO_TEMP_MIN_FROM_REG(reg))*10)/(16 - pwm);
 	ret = ((reg & 0xf8) |
 	       (range < 10000 ? 0 :
 		range < 20000 ? 1 :
@@ -663,7 +649,7 @@ static ssize_t fan_div_store(struct device *dev,
 			    data->fan_min[nr]);
 
 	/* Invalidate the cache: fan speed is no longer valid */
-	data->valid = 0;
+	data->valid = false;
 	mutex_unlock(&data->update_lock);
 	return count;
 }
@@ -999,7 +985,7 @@ static int adm1031_detect(struct i2c_client *client,
 		return -ENODEV;
 	name = (id == 0x30) ? "adm1030" : "adm1031";
 
-	strlcpy(info->type, name, I2C_NAME_SIZE);
+	strscpy(info->type, name, I2C_NAME_SIZE);
 
 	return 0;
 }
@@ -1035,8 +1021,7 @@ static void adm1031_init_client(struct i2c_client *client)
 	data->update_interval = update_intervals[i];
 }
 
-static int adm1031_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int adm1031_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
@@ -1048,7 +1033,7 @@ static int adm1031_probe(struct i2c_client *client,
 
 	i2c_set_clientdata(client, data);
 	data->client = client;
-	data->chip_type = id->driver_data;
+	data->chip_type = (uintptr_t)i2c_get_match_data(client);
 	mutex_init(&data->update_lock);
 
 	if (data->chip_type == adm1030)

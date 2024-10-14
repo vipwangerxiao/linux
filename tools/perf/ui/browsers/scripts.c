@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
-#include "../../util/sort.h"
-#include "../../util/util.h"
+#include "../../builtin.h"
+#include "../../perf.h"
+#include "../../util/util.h" // perf_exe()
+#include "../util.h"
 #include "../../util/hist.h"
 #include "../../util/debug.h"
 #include "../../util/symbol.h"
 #include "../browser.h"
 #include "../libslang.h"
 #include "config.h"
+#include <linux/string.h>
+#include <linux/zalloc.h>
+#include <stdlib.h>
 
 #define SCRIPT_NAMELEN	128
 #define SCRIPT_MAX_NO	64
@@ -78,7 +83,7 @@ static int scripts_config(const char *var, const char *value, void *data)
  * Return -1 on failure.
  */
 static int list_scripts(char *script_name, bool *custom,
-			struct perf_evsel *evsel)
+			struct evsel *evsel)
 {
 	char *buf, *paths[SCRIPT_MAX_NO], *names[SCRIPT_MAX_NO];
 	int i, num, choice;
@@ -100,9 +105,9 @@ static int list_scripts(char *script_name, bool *custom,
 		return -1;
 
 	if (evsel)
-		attr_to_script(scriptc.extra_format, &evsel->attr);
+		attr_to_script(scriptc.extra_format, &evsel->core.attr);
 	add_script_option("Show individual samples", "", &scriptc);
-	add_script_option("Show individual samples with assembler", "-F +insn --xed",
+	add_script_option("Show individual samples with assembler", "-F +disasm",
 			  &scriptc);
 	add_script_option("Show individual samples with source", "-F +srcline,+srccode",
 			  &scriptc);
@@ -121,7 +126,7 @@ static int list_scripts(char *script_name, bool *custom,
 			SCRIPT_FULLPATH_LEN);
 	if (num < 0)
 		num = 0;
-	choice = ui__popup_menu(num + max_std, (char * const *)names);
+	choice = ui__popup_menu(num + max_std, (char * const *)names, NULL);
 	if (choice < 0) {
 		ret = -1;
 		goto out;
@@ -131,8 +136,10 @@ static int list_scripts(char *script_name, bool *custom,
 		int key = ui_browser__input_window("perf script command",
 				"Enter perf script command line (without perf script prefix)",
 				script_args, "", 0);
-		if (key != K_ENTER)
-			return -1;
+		if (key != K_ENTER) {
+			ret = -1;
+			goto out;
+		}
 		sprintf(script_name, "%s script %s", perf, script_args);
 	} else if (choice < num + max_std) {
 		strcpy(script_name, paths[choice]);
@@ -142,7 +149,7 @@ static int list_scripts(char *script_name, bool *custom,
 out:
 	free(buf);
 	for (i = 0; i < max_std; i++)
-		free(paths[i]);
+		zfree(&paths[i]);
 	return ret;
 }
 
@@ -159,10 +166,11 @@ void run_script(char *cmd)
 	printf("\033[c\033[H\033[J");
 	fflush(stdout);
 	SLang_init_tty(0, 0, 0);
+	SLtty_set_suspend_state(true);
 	SLsmg_refresh();
 }
 
-int script_browse(const char *script_opt, struct perf_evsel *evsel)
+int script_browse(const char *script_opt, struct evsel *evsel)
 {
 	char *cmd, script_name[SCRIPT_FULLPATH_LEN];
 	bool custom = false;

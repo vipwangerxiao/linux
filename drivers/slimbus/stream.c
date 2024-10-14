@@ -18,15 +18,17 @@
  *		and the first slot of the next  consecutive Segment.
  * @segdist_code: Segment Distribution Code SD[11:0]
  * @seg_offset_mask: Segment offset mask in SD[11:0]
- * @segdist_codes: List of all possible Segmet Distribution codes.
  */
-static const struct segdist_code {
+struct segdist_code {
 	int ratem;
 	int seg_interval;
 	int segdist_code;
 	u32 seg_offset_mask;
 
-} segdist_codes[] = {
+};
+
+/* segdist_codes - List of all possible Segment Distribution codes. */
+static const struct segdist_code segdist_codes[] = {
 	{1,	1536,	0x200,	 0xdff},
 	{2,	768,	0x100,	 0xcff},
 	{4,	384,	0x080,	 0xc7f},
@@ -67,10 +69,10 @@ static const int slim_presence_rate_table[] = {
 	384000,
 	768000,
 	0, /* Reserved */
-	110250,
-	220500,
-	441000,
-	882000,
+	11025,
+	22050,
+	44100,
+	88200,
 	176400,
 	352800,
 	705600,
@@ -84,7 +86,7 @@ static const int slim_presence_rate_table[] = {
 	512000,
 };
 
-/*
+/**
  * slim_stream_allocate() - Allocate a new SLIMbus Stream
  * @dev:Slim device to be associated with
  * @name: name of the stream
@@ -189,7 +191,7 @@ static int slim_get_prate_code(int rate)
 	return -EINVAL;
 }
 
-/*
+/**
  * slim_stream_prepare() - Prepare a SLIMbus Stream
  *
  * @rt: instance of slim stream runtime to configure
@@ -204,7 +206,7 @@ int slim_stream_prepare(struct slim_stream_runtime *rt,
 {
 	struct slim_controller *ctrl = rt->dev->ctrl;
 	struct slim_port *port;
-	int num_ports, i, port_id;
+	int num_ports, i, port_id, prrate;
 
 	if (rt->ports) {
 		dev_err(&rt->dev->dev, "Stream already Prepared\n");
@@ -220,6 +222,13 @@ int slim_stream_prepare(struct slim_stream_runtime *rt,
 	rt->rate = cfg->rate;
 	rt->bps = cfg->bps;
 	rt->direction = cfg->direction;
+
+	prrate = slim_get_prate_code(cfg->rate);
+	if (prrate < 0) {
+		dev_err(&rt->dev->dev, "Cannot get presence rate for rate %d Hz\n",
+			cfg->rate);
+		return prrate;
+	}
 
 	if (cfg->rate % ctrl->a_framer->superfreq) {
 		/*
@@ -241,7 +250,7 @@ int slim_stream_prepare(struct slim_stream_runtime *rt,
 		port = &rt->ports[i];
 		port->state = SLIM_PORT_DISCONNECTED;
 		port->id = port_id;
-		port->ch.prrate = slim_get_prate_code(cfg->rate);
+		port->ch.prrate = prrate;
 		port->ch.id = cfg->chs[i];
 		port->ch.data_fmt = SLIM_CH_DATA_FMT_NOT_DEFINED;
 		port->ch.aux_fmt = SLIM_CH_AUX_FMT_NOT_APPLICABLE;
@@ -336,7 +345,7 @@ static int slim_activate_channel(struct slim_stream_runtime *stream,
 	return slim_do_transfer(sdev->ctrl, &txn);
 }
 
-/*
+/**
  * slim_stream_enable() - Enable a prepared SLIMbus Stream
  *
  * @stream: instance of slim stream runtime to enable
@@ -389,7 +398,7 @@ int slim_stream_enable(struct slim_stream_runtime *stream)
 }
 EXPORT_SYMBOL_GPL(slim_stream_enable);
 
-/*
+/**
  * slim_stream_disable() - Disable a SLIMbus Stream
  *
  * @stream: instance of slim stream runtime to disable
@@ -407,6 +416,9 @@ int slim_stream_disable(struct slim_stream_runtime *stream)
 	struct slim_controller *ctrl = stream->dev->ctrl;
 	int ret, i;
 
+	if (!stream->ports || !stream->num_ports)
+		return -EINVAL;
+
 	if (ctrl->disable_stream)
 		ctrl->disable_stream(stream);
 
@@ -423,7 +435,7 @@ int slim_stream_disable(struct slim_stream_runtime *stream)
 }
 EXPORT_SYMBOL_GPL(slim_stream_disable);
 
-/*
+/**
  * slim_stream_unprepare() - Un-prepare a SLIMbus Stream
  *
  * @stream: instance of slim stream runtime to unprepare
@@ -438,6 +450,9 @@ int slim_stream_unprepare(struct slim_stream_runtime *stream)
 {
 	int i;
 
+	if (!stream->ports || !stream->num_ports)
+		return -EINVAL;
+
 	for (i = 0; i < stream->num_ports; i++)
 		slim_disconnect_port(stream, &stream->ports[i]);
 
@@ -449,7 +464,7 @@ int slim_stream_unprepare(struct slim_stream_runtime *stream)
 }
 EXPORT_SYMBOL_GPL(slim_stream_unprepare);
 
-/*
+/**
  * slim_stream_free() - Free a SLIMbus Stream
  *
  * @stream: instance of slim stream runtime to free

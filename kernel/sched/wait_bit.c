@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
 /*
  * The implementation of the wait_bit*() and related waiting APIs:
  */
-#include "sched.h"
 
 #define WAIT_TABLE_BITS 8
 #define WAIT_TABLE_SIZE (1 << WAIT_TABLE_BITS)
@@ -32,7 +33,7 @@ int wake_bit_function(struct wait_queue_entry *wq_entry, unsigned mode, int sync
 EXPORT_SYMBOL(wake_bit_function);
 
 /*
- * To allow interruptible waiting and asynchronous (i.e. nonblocking)
+ * To allow interruptible waiting and asynchronous (i.e. non-blocking)
  * waiting, the actions of __wait_on_bit() and __wait_on_bit_lock() are
  * permitted return codes. Nonzero return codes halt waiting and return.
  */
@@ -46,7 +47,7 @@ __wait_on_bit(struct wait_queue_head *wq_head, struct wait_bit_queue_entry *wbq_
 		prepare_to_wait(wq_head, &wbq_entry->wq_entry, mode);
 		if (test_bit(wbq_entry->key.bit_nr, wbq_entry->key.flags))
 			ret = (*action)(&wbq_entry->key, mode);
-	} while (test_bit(wbq_entry->key.bit_nr, wbq_entry->key.flags) && !ret);
+	} while (test_bit_acquire(wbq_entry->key.bit_nr, wbq_entry->key.flags) && !ret);
 
 	finish_wait(wq_head, &wbq_entry->wq_entry);
 
@@ -132,7 +133,7 @@ EXPORT_SYMBOL(__wake_up_bit);
  * @bit: the bit of the word being waited on
  *
  * There is a standard hashed waitqueue table for generic use. This
- * is the part of the hashtable's accessor API that wakes up waiters
+ * is the part of the hash-table's accessor API that wakes up waiters
  * on a bit. For instance, if one were to have waiters on a bitflag,
  * one would call wake_up_bit() after clearing the bit.
  *
@@ -178,6 +179,7 @@ void init_wait_var_entry(struct wait_bit_queue_entry *wbq_entry, void *var, int 
 			.bit_nr = -1,
 		},
 		.wq_entry = {
+			.flags	 = flags,
 			.private = current,
 			.func	 = var_wake_function,
 			.entry	 = LIST_HEAD_INIT(wbq_entry->wq_entry.entry),

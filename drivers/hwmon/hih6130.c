@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /* Honeywell HIH-6130/HIH-6131 humidity and temperature sensor driver
  *
  * Copyright (C) 2012 Iain Paton <ipaton0@gmail.com>
  *
  * heavily based on the sht21 driver
  * Copyright (C) 2010 Urs Fleisch <urs.fleisch@sensirion.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA
  *
  * Data sheets available (2012-06-22) at
  * http://sensing.honeywell.com/index.php?ci_id=3106&la_id=1&defId=44872
@@ -163,7 +150,7 @@ out:
 }
 
 /**
- * hih6130_show_temperature() - show temperature measurement value in sysfs
+ * hih6130_temperature_show() - show temperature measurement value in sysfs
  * @dev: device
  * @attr: device attribute
  * @buf: sysfs buffer (PAGE_SIZE) where measurement values are written to
@@ -185,7 +172,7 @@ static ssize_t hih6130_temperature_show(struct device *dev,
 }
 
 /**
- * hih6130_show_humidity() - show humidity measurement value in sysfs
+ * hih6130_humidity_show() - show humidity measurement value in sysfs
  * @dev: device
  * @attr: device attribute
  * @buf: sysfs buffer (PAGE_SIZE) where measurement values are written to
@@ -217,8 +204,7 @@ static struct attribute *hih6130_attrs[] = {
 
 ATTRIBUTE_GROUPS(hih6130);
 
-static int hih6130_probe(struct i2c_client *client,
-				   const struct i2c_device_id *id)
+static int hih6130_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct hih6130 *hih6130;
@@ -247,7 +233,7 @@ static int hih6130_probe(struct i2c_client *client,
 
 /* Device ID table */
 static const struct i2c_device_id hih6130_id[] = {
-	{ "hih6130", 0 },
+	{ "hih6130" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, hih6130_id);

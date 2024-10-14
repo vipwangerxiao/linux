@@ -1,20 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * emc2103.c - Support for SMSC EMC2103
  * Copyright (c) 2010 SMSC
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/module.h>
@@ -456,7 +443,7 @@ static ssize_t pwm1_enable_store(struct device *dev,
 	}
 
 	result = read_u8_from_i2c(client, REG_FAN_CONF1, &conf_reg);
-	if (result) {
+	if (result < 0) {
 		count = result;
 		goto err;
 	}
@@ -564,7 +551,7 @@ static const struct attribute_group emc2103_temp4_group = {
 };
 
 static int
-emc2103_probe(struct i2c_client *client, const struct i2c_device_id *id)
+emc2103_probe(struct i2c_client *client)
 {
 	struct emc2103_data *data;
 	struct device *hwmon_dev;
@@ -633,7 +620,7 @@ emc2103_probe(struct i2c_client *client, const struct i2c_device_id *id)
 }
 
 static const struct i2c_device_id emc2103_ids[] = {
-	{ "emc2103", 0, },
+	{ "emc2103" },
 	{ /* LIST END */ }
 };
 MODULE_DEVICE_TABLE(i2c, emc2103_ids);
@@ -656,7 +643,7 @@ emc2103_detect(struct i2c_client *new_client, struct i2c_board_info *info)
 	if ((product != 0x24) && (product != 0x26))
 		return -ENODEV;
 
-	strlcpy(info->type, "emc2103", I2C_NAME_SIZE);
+	strscpy(info->type, "emc2103", I2C_NAME_SIZE);
 
 	return 0;
 }
